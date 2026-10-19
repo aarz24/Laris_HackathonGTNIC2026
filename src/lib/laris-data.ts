@@ -184,8 +184,8 @@ function nextId(prefix: string, entries: { id: string }[]): string {
   return `${prefix}-${sequence}`;
 }
 
-function segmentFor(customer: Customer): Customer["segment"] {
-  const elapsed = (Date.parse(`${DEMO_DATE}T23:59:59Z`) - Date.parse(customer.lastVisit)) / 86400000;
+function segmentFor(customer: Customer, endDate = DEMO_DATE): Customer["segment"] {
+  const elapsed = (Date.parse(`${endDate}T23:59:59Z`) - Date.parse(customer.lastVisit)) / 86400000;
   if (elapsed > 60) return "Hilang";
   if (elapsed > 30) return "Berisiko";
   return customer.visits >= 20 ? "Juara" : customer.visits >= 8 ? "Setia" : "Potensial";
@@ -298,7 +298,9 @@ export function recordPurchase(state: BusinessState, input: { itemId: string; qu
   return { ...state, purchases: [...state.purchases, purchase], stockMovements: [...state.stockMovements, movement] };
 }
 
-export function createInitialState(): BusinessState {
+/** Deterministic 90-day "Kopi Senja" history ending on `endDate` (the seed script anchors it to the real date). */
+export function createInitialState(endDate: string = DEMO_DATE): BusinessState {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(endDate) || Number.isNaN(Date.parse(`${endDate}T00:00:00Z`))) throw new Error("Tanggal akhir tidak valid.");
   let randomState = 20261018;
   const random = () => {
     randomState = (Math.imul(randomState, 1664525) + 1013904223) >>> 0;
@@ -312,7 +314,7 @@ export function createInitialState(): BusinessState {
   const sales: Sale[] = [];
   const expenses: Expense[] = [];
   const weightedMenu = [0, 0, 0, 0, 1, 1, 2, 2, 3, 3, 4, 5, 6, 7, 8];
-  const end = Date.parse(`${DEMO_DATE}T00:00:00Z`);
+  const end = Date.parse(`${endDate}T00:00:00Z`);
   for (let day = 0; day < 90; day++) {
     const date = new Date(end - (89 - day) * 86400000).toISOString().slice(0, 10);
     const count = day === 89 ? 86 : 15 + Math.floor(random() * 16);
@@ -355,7 +357,7 @@ export function createInitialState(): BusinessState {
     }
     if (day % 7 === 0) addExpense("Kebersihan & perlengkapan kedai", "Operasional", 125000);
   }
-  for (const customer of customers) customer.segment = segmentFor(customer);
+  for (const customer of customers) customer.segment = segmentFor(customer, endDate);
   return {
     version: 1, sales, expenses, customers, purchases: [],
     // openingStock is the demo's remaining stock, not stock before historical sales.
@@ -370,10 +372,11 @@ const numberWords: Record<string, number> = {
 const menuAliases: Record<string, string> = {
   "es kopi susu gula aren": "kopi-susu", "es kopi susu": "kopi-susu", "kopi susu": "kopi-susu", "es kopsu": "kopi-susu", kopsu: "kopi-susu",
   "butter croissant": "croissant", croissant: "croissant", "matcha latte": "matcha", "es matcha": "matcha", matcha: "matcha",
-  "es americano": "americano", americano: "americano", "pain au chocolat": "pain-chocolat", "pain chocolat": "pain-chocolat", "pain-chocolat": "pain-chocolat",
-  "cinnamon roll": "cinnamon", cinnamon: "cinnamon", cappuccino: "cappuccino", kapucino: "cappuccino",
+  "es americano": "americano", americano: "americano", "es amer": "americano", amer: "americano",
+  "pain au chocolat": "pain-chocolat", "pain chocolat": "pain-chocolat", "pain-chocolat": "pain-chocolat", "roti cokelat": "pain-chocolat", "cokelat pastry": "pain-chocolat",
+  "cinnamon roll": "cinnamon", cinnamon: "cinnamon", "roti kayu manis": "cinnamon", cappuccino: "cappuccino", kapucino: "cappuccino",
   "iced chocolate": "chocolate", "es cokelat": "chocolate", "es coklat": "chocolate", chocolate: "chocolate", cokelat: "chocolate", coklat: "chocolate",
-  "es teh melati": "tea", "teh melati": "tea", "iced tea": "tea", "es teh": "tea", tea: "tea", teh: "tea",
+  "es teh melati": "tea", "teh melati": "tea", "iced tea": "tea", "es teh manis": "tea", "teh manis": "tea", "es teh": "tea", tea: "tea", teh: "tea",
 };
 const aliasPattern = Object.keys(menuAliases).sort((a, b) => b.length - a.length).join("|");
 const quantityPattern = `(?:\\d+|${Object.keys(numberWords).join("|")})`;
@@ -389,7 +392,7 @@ export function parseOrder(text: string): { items: CartItem[]; payment: Sale["pa
   const clauses = normalized.split(/[,;\n]+|\s+(?:dan|&|\+)\s+/).map((clause) => clause.trim().replace(/\s+/g, " ")).filter(Boolean);
   for (let clause of clauses) {
     const original = clause;
-    clause = clause.replace(/^(?:tolong\s+)?(?:(?:saya\s+)?(?:mau\s+)?(?:pesan|beli)|saya mau|mau)\s+/, "");
+    clause = clause.replace(/^(?:tolong\s+)?(?:(?:saya\s+)?(?:mau\s+)?(?:pesan|beli)|saya mau|mau)\s+|^tolong\s+/, "");
     const paymentMatch = clause.match(/(?:^|\s+)(?:(?:bayar|pembayaran)(?:\s+(?:pakai|dengan))?\s+|(?:pakai|via|dengan)\s+)?(qris|tunai|cash|transfer)$/);
     if (paymentMatch) {
       const selected: Sale["payment"] = paymentMatch[1] === "qris" ? "QRIS" : paymentMatch[1] === "transfer" ? "Transfer" : "Tunai";

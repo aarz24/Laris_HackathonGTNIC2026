@@ -1,0 +1,50 @@
+{"id":1,"category":"slang","text":"2 es kopsu less sugar dan satu croissant. Bayar QRIS","expected":{"items":[{"productId":"kopi-susu","quantity":2,"note":"less sugar"},{"productId":"croissant","quantity":1}],"payment":"QRIS","unknown":[]}}
+{"id":2,"category":"slang","text":"2 es kopi susu kurang gula, 1 matcha latte; bayar dengan transfer","expected":{"items":[{"productId":"kopi-susu","quantity":2,"note":"less sugar"},{"productId":"matcha","quantity":1}],"payment":"Transfer","unknown":[]}}
+{"id":3,"category":"standard","text":"Saya mau pesan satu cup americano, croissant 2 pakai tunai","expected":{"items":[{"productId":"americano","quantity":1},{"productId":"croissant","quantity":2}],"payment":"Tunai","unknown":[]}}
+{"id":4,"category":"numbers","text":"satu es kopi susu","expected":{"items":[{"productId":"kopi-susu","quantity":1}],"payment":"Tunai","unknown":[]}}
+{"id":5,"category":"numbers","text":"dua es kopi susu","expected":{"items":[{"productId":"kopi-susu","quantity":2}],"payment":"Tunai","unknown":[]}}
+{"id":6,"category":"numbers","text":"tiga es kopi susu","expected":{"items":[{"productId":"kopi-susu","quantity":3}],"payment":"Tunai","unknown":[]}}
+{"id":7,"category":"numbers","text":"empat es kopi susu","expected":{"items":[{"productId":"kopi-susu","quantity":4}],"payment":"Tunai","unknown":[]}}
+{"id":8,"category":"numbers","text":"lima es kopi susu","expected":{"items":[{"productId":"kopi-susu","quantity":5}],"payment":"Tunai","unknown":[]}}
+{"id":9,"category":"numbers","text":"enam es kopi susu","expected":{"items":[{"productId":"kopi-susu","quantity":6}],"payment":"Tunai","unknown":[]}}
+{"id":10,"category":"numbers","text":"tujuh es kopi susu","expected":{"items":[{"productId":"kopi-susu","quantity":7}],"payment":"Tunai","unknown":[]}}
+{"id":11,"category":"numbers","text":"delapan es kopi susu","expected":{"items":[{"productId":"kopi-susu","quantity":8}],"payment":"Tunai","unknown":[]}}
+{"id":12,"category":"numbers","text":"sembilan es kopi susu","expected":{"items":[{"productId":"kopi-susu","quantity":9}],"payment":"Tunai","unknown":[]}}
+{"id":13,"category":"numbers","text":"sepuluh es kopi susu","expected":{"items":[{"productId":"kopi-susu","quantity":10}],"payment":"Tunai","unknown":[]}}
+{"id":14,"category":"menu_coverage","text":"1 kopi susu, 1 americano, 1 matcha, 1 croissant, 1 pain chocolat, 1 cinnamon, 1 cappuccino, 1 chocolate, 1 tea","expected":{"items":[{"productId":"kopi-susu","quantity":1},{"productId":"americano","quantity":1},{"productId":"matcha","quantity":1},{"productId":"croissant","quantity":1},{"productId":"pain-chocolat","quantity":1},{"productId":"cinnamon","quantity":1},{"productId":"cappuccino","quantity":1},{"productId":"chocolate","quantity":1},{"productId":"tea","quantity":1}],"payment":"Tunai","unknown":[]}}
+{"id":15,"category":"payment","text":"pesan 1 kopsu bayar qris","expected":{"items":[{"productId":"kopi-susu","quantity":1}],"payment":"QRIS","unknown":[]}}
+{"id":16,"category":"payment","text":"pesan dua americano via transfer","expected":{"items":[{"productId":"americano","quantity":2}],"payment":"Transfer","unknown":[]}}
+{"id":17,"category":"payment","text":"mau beli 1 croissant bayar cash","expected":{"items":[{"productId":"croissant","quantity":1}],"payment":"Tunai","unknown":[]}}
+{"id":18,"category":"modifiers","text":"1 es kopsu tanpa gula","expected":{"items":[{"productId":"kopi-susu","quantity":1,"note":"tanpa gula"}],"payment":"Tunai","unknown":[]}}
+{"id":19,"category":"modifiers","text":"2 cappuccino less ice","expected":{"items":[{"productId":"cappuccino","quantity":2,"note":"less ice"}],"payment":"Tunai","unknown":[]}}
+{"id":20,"category":"modifiers","text":"1 matcha latte sedikit gula","expected":{"items":[{"productId":"matcha","quantity":1,"note":"less sugar"}],"payment":"Tunai","unknown":[]}}
+{"id":21,"category":"modifiers","text":"1 es kopi susu gula aren tanpa es","expected":{"items":[{"productId":"kopi-susu","quantity":1,"note":"tanpa es"}],"payment":"Tunai","unknown":[]}}
+{"id":22,"category":"modifiers","text":"dua es teh melati sedikit es","expected":{"items":[{"productId":"tea","quantity":2,"note":"sedikit es"}],"payment":"Tunai","unknown":[]}}
+{"id":23,"category":"units","text":"3 cup americano","expected":{"items":[{"productId":"americano","quantity":3}],"payment":"Tunai","unknown":[]}}
+{"id":24,"category":"units","text":"2 gelas es cokelat","expected":{"items":[{"productId":"chocolate","quantity":2}],"payment":"Tunai","unknown":[]}}
+{"id":25,"category":"units","text":"4 pcs butter croissant","expected":{"items":[{"productId":"croissant","quantity":4}],"payment":"Tunai","unknown":[]}}
+{"id":26,"category":"units","text":"2 buah cinnamon roll","expected":{"items":[{"productId":"cinnamon","quantity":2}],"payment":"Tunai","unknown":[]}}
+{"id":27,"category":"slang","text":"3 kopsu gula sedikit dan 2 pain au chocolat bayar qris","expected":{"items":[{"productId":"kopi-susu","quantity":3,"note":"less sugar"},{"productId":"pain-chocolat","quantity":2}],"payment":"QRIS","unknown":[]}}
+{"id":28,"category":"slang","text":"pesan 1 kapucino dan 1 es coklat","expected":{"items":[{"productId":"cappuccino","quantity":1},{"productId":"chocolate","quantity":1}],"payment":"Tunai","unknown":[]}}
+{"id":29,"category":"slang","text":"tolong 2 es amer dan satu roti cokelat bayar transfer","expected":{"items":[{"productId":"americano","quantity":2},{"productId":"pain-chocolat","quantity":1}],"payment":"Transfer","unknown":[]}}
+{"id":30,"category":"compound","text":"1 matcha, 1 americano less sugar, 1 croissant bayar qris","expected":{"items":[{"productId":"matcha","quantity":1},{"productId":"americano","quantity":1,"note":"less sugar"},{"productId":"croissant","quantity":1}],"payment":"QRIS","unknown":[]}}
+{"id":31,"category":"compound","text":"dua iced chocolate dan tiga es teh bayar tunai","expected":{"items":[{"productId":"chocolate","quantity":2},{"productId":"tea","quantity":3}],"payment":"Tunai","unknown":[]}}
+{"id":32,"category":"polite_prefix","text":"tolong saya mau pesan 1 es kopi susu bayar qris","expected":{"items":[{"productId":"kopi-susu","quantity":1}],"payment":"QRIS","unknown":[]}}
+{"id":33,"category":"polite_prefix","text":"mau beli dua cinnamon roll","expected":{"items":[{"productId":"cinnamon","quantity":2}],"payment":"Tunai","unknown":[]}}
+{"id":34,"category":"polite_prefix","text":"pesan 1 matcha latte bayar transfer","expected":{"items":[{"productId":"matcha","quantity":1}],"payment":"Transfer","unknown":[]}}
+{"id":35,"category":"alias","text":"2 es teh manis","expected":{"items":[{"productId":"tea","quantity":2}],"payment":"Tunai","unknown":[]}}
+{"id":36,"category":"alias","text":"1 iced tea bayar qris","expected":{"items":[{"productId":"tea","quantity":1}],"payment":"QRIS","unknown":[]}}
+{"id":37,"category":"alias","text":"dua cokelat pastry","expected":{"items":[{"productId":"pain-chocolat","quantity":2}],"payment":"Tunai","unknown":[]}}
+{"id":38,"category":"alias","text":"1 roti kayu manis","expected":{"items":[{"productId":"cinnamon","quantity":1}],"payment":"Tunai","unknown":[]}}
+{"id":39,"category":"punctuation","text":"kopsu 1; americano 2; bayar qris","expected":{"items":[{"productId":"kopi-susu","quantity":1},{"productId":"americano","quantity":2}],"payment":"QRIS","unknown":[]}}
+{"id":40,"category":"punctuation","text":"1 matcha latte + 1 croissant & 1 es teh. bayar tunai","expected":{"items":[{"productId":"matcha","quantity":1},{"productId":"croissant","quantity":1},{"productId":"tea","quantity":1}],"payment":"Tunai","unknown":[]}}
+{"id":41,"category":"unknown_item","text":"dua kopsu dan satu pizza","expected":{"items":[{"productId":"kopi-susu","quantity":2}],"payment":"Tunai","unknown":["satu pizza"]}}
+{"id":42,"category":"unknown_item","text":"1 americano dan 1 burger keju bayar qris","expected":{"items":[{"productId":"americano","quantity":1}],"payment":"QRIS","unknown":["1 burger keju bayar qris"]}}
+{"id":43,"category":"unknown_item","text":"dua bakso malang bayar tunai","expected":{"items":[],"payment":"Tunai","unknown":["dua bakso malang bayar tunai"]}}
+{"id":44,"category":"conflict_payment","text":"1 kopsu bayar QRIS, bayar tunai","expected":{"items":[{"productId":"kopi-susu","quantity":1}],"payment":"QRIS","unknown":["bayar tunai"]}}
+{"id":45,"category":"quantity_fallback","text":"kopsu","expected":{"items":[{"productId":"kopi-susu","quantity":1}],"payment":"Tunai","unknown":[]}}
+{"id":46,"category":"quantity_fallback","text":"croissant bayar qris","expected":{"items":[{"productId":"croissant","quantity":1}],"payment":"QRIS","unknown":[]}}
+{"id":47,"category":"multi_item","text":"5 kopsu less sugar, 5 americano, 5 croissant bayar qris","expected":{"items":[{"productId":"kopi-susu","quantity":5,"note":"less sugar"},{"productId":"americano","quantity":5},{"productId":"croissant","quantity":5}],"payment":"QRIS","unknown":[]}}
+{"id":48,"category":"mixed_case","text":"2 ES KOPI SUSU LESS SUGAR BAYAR QRIS","expected":{"items":[{"productId":"kopi-susu","quantity":2,"note":"less sugar"}],"payment":"QRIS","unknown":[]}}
+{"id":49,"category":"slang_notes","text":"1 es kopi susu kurang gula sedikit es","expected":{"items":[{"productId":"kopi-susu","quantity":1,"note":"less sugar sedikit es"}],"payment":"Tunai","unknown":[]}}
+{"id":50,"category":"empty","text":"   ","expected":{"items":[],"payment":"Tunai","unknown":[]}}
