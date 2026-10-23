@@ -1,0 +1,5 @@
+- Supabase clients are obtained through factory functions in `lib.ts` (`adminClient` for service-role writes, `userClient` for RLS-enforced reads) rather than constructing clients inline.
+- Environment variables are validated at startup via `requireEnv`, which throws a descriptive error listing the missing key and pointing to `.env.example`.
+- Bulk inserts use an `insertChunks(db, table, rows, size)` helper that slices arrays into fixed-size batches (500–1000) to avoid Supabase payload limits.
+- Tenant isolation is enforced by seeding two distinct businesses (`DEMO_SLUG` and `TENANT_B_SLUG`) and asserting cross-tenant visibility/read-write failures per table in the RLS test suite.
+- CSS transformation scripts read `src/app/globals.css`, apply string replacements against a static replacement map, and write the file back, using a sentinel comment (`/* laris-polish */` or `/*__ROOT__*/`) to make re-runs idempotent.

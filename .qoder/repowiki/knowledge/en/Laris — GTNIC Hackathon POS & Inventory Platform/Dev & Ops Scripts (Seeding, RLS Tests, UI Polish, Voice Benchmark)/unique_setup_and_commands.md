@@ -1,0 +1,1 @@
+Requires a `.env` with `NEXT_PUBLIC_SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY` / `NEXT_PUBLIC_SUPABASE_ANON_KEY`, `SUPABASE_SERVICE_ROLE_KEY`, `LARIS_DEMO_EMAIL`, and `LARIS_DEMO_PASSWORD` (≥ 8 chars). Run seeding via `npm run db:seed [-- YYYY-MM-DD]` before running `npm run test:rls` or `npm run eval:voice`.

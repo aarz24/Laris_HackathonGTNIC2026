@@ -1,0 +1,4 @@
+- Server-side-only code imports the `server-only` package to prevent accidental client bundling of Supabase service-role keys and RPC calls.
+- Environment variables are read from `.env` / `.env.local` via Node's native env loader used by all npm scripts (`db:seed`, `test:rls`, `eval:voice`).
+- All Supabase access goes through typed snapshot mappings in `src/lib/repo.ts` rather than ad-hoc queries, keeping per-workspace data shape consistent across components and scripts.
+- Tenant isolation is enforced by requiring `business_id` on every data table and checking membership/role inside Supabase RPCs instead of relying on client-side guards.

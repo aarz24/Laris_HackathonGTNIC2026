@@ -1,0 +1,1 @@
+Next.js 15 with Turbopack, React 19, Supabase JS SDK + SSR helpers, Zod v4 for validation, @ai-sdk/google for Gemini, Tailwind CSS v4, ESLint 9, and Node 22+ for native TypeScript execution of both the dev server and the `scripts/` utilities.

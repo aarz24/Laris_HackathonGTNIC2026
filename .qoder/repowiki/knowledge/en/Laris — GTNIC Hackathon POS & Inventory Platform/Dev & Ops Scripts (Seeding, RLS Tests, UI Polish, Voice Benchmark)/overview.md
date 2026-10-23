@@ -1,0 +1,1 @@
+Node/TS scripts that seed the Supabase demo tenants, run Row-Level Security isolation tests, polish and tokenize globals.css, and benchmark the Indonesian voice-to-cart parser.
