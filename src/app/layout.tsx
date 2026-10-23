@@ -10,7 +10,7 @@ const jakarta = Plus_Jakarta_Sans({
 
 export const metadata: Metadata = {
   title: "Laris — Partner tumbuh usahamu",
-  description: "Catat cukup ngomong. Stok aman. Pelanggan balik lagi. Kenali Laris, partner usaha untuk UMKM Indonesia, melalui demo interaktif Kopi Senja.",
+  description: "Kelola kasir, stok, resep, pelanggan, tim, dan keuangan usaha F&B dalam satu workspace yang aman.",
   applicationName: "Laris",
   icons: { icon: "/icon.svg" },
 };

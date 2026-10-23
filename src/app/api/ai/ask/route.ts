@@ -1,244 +1,217 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { generateText, isStepCount, tool } from "ai";
 import { z } from "zod";
-import { CATALOG_CONTEXT, getGoogleModel, logAiTelemetry } from "@/lib/ai";
-import { createInitialState, inventory, products } from "@/lib/laris-data";
-import { loadSnapshot } from "@/lib/repo";
-import { createClient } from "@/lib/supabase/server";
+import { aiErrorResponse, catalogContext, getGoogleModel, logAiTelemetry, requireAiContext, type AiContext } from "@/lib/ai";
+import { currency, getStock, type BusinessState, type Sale } from "@/lib/laris-data";
 
 export const dynamic = "force-dynamic";
 
+const requestSchema = z.object({
+  mode: z.enum(["local", "cloud"]),
+  question: z.string().trim().min(1).max(2000),
+  history: z.array(z.object({
+    role: z.enum(["user", "assistant"]),
+    text: z.string().trim().min(1).max(2000),
+  })).max(12).optional().default([]),
+});
+
+function salesInPeriod(sales: Sale[], today: string, days: number) {
+  const end = new Date(`${today}T00:00:00Z`);
+  const cutoff = new Date(end.getTime() - (days - 1) * 86400000).toISOString().slice(0, 10);
+  return sales.filter((sale) => {
+    const date = sale.createdAt.slice(0, 10);
+    return date >= cutoff && date <= today;
+  });
+}
+
+function estimatedCosts(sales: Sale[], state: BusinessState) {
+  const catalog = state.products ?? [];
+  return sales.reduce((total, sale) => total + sale.items.reduce((cost, item) => {
+    const product = catalog.find((entry) => entry.id === item.productId);
+    return cost + (product?.cost ?? 0) * item.quantity;
+  }, 0), 0);
+}
+
+function productRanking(state: BusinessState) {
+  const counts = new Map<string, number>();
+  for (const sale of state.sales) for (const item of sale.items) counts.set(item.productId, (counts.get(item.productId) ?? 0) + item.quantity);
+  const catalog = state.products ?? [];
+  return Array.from(counts.entries()).map(([id, quantity]) => ({
+    productId: id,
+    name: catalog.find((product) => product.id === id)?.name ?? id,
+    quantitySold: quantity,
+  })).sort((a, b) => b.quantitySold - a.quantitySold);
+}
+
+function localAnswer(question: string, state: BusinessState): string {
+  const q = question.toLowerCase();
+  const ingredients = state.inventory ?? [];
+  const ownerName = state.business.owner || "Pemilik";
+
+  if (/terlaris|paling laris|favorit|menu.*(?:paling|terbanyak)|produk.*(?:paling|terbanyak)/.test(q)) {
+    const ranking = productRanking(state);
+    if (!ranking.length) return "Belum ada penjualan yang bisa dibandingkan. Catat transaksi pertama untuk melihat produk terlaris.";
+    const [first, second] = ranking;
+    return `${first.name} adalah produk terlaris dengan ${first.quantitySold} item terjual.${second ? ` Berikutnya ${second.name} dengan ${second.quantitySold} item.` : ""} Gunakan laporan penjualan untuk memilih periode sebelum mengambil keputusan promo.`;
+  }
+
+  if (/stok|bahan|habis|menipis|belanja|restock/.test(q)) {
+    if (!ingredients.length) return "Belum ada bahan baku di workspace. Tambahkan bahan dan batas minimum stok agar rekomendasi belanja bisa dihitung.";
+    const lowStock = ingredients.filter((item) => getStock(state, item.id) <= item.reorderPoint);
+    if (!lowStock.length) return `Semua ${ingredients.length} bahan masih di atas batas minimum. Belum ada yang perlu dibeli berdasarkan aturan stok saat ini.`;
+    return `Ada ${lowStock.length} bahan yang perlu diperhatikan: ${lowStock.map((item) => `${item.name} tersisa ${getStock(state, item.id).toLocaleString("id-ID")} ${item.unit}`).join(", ")}. Prioritaskan pembelian bahan tersebut.`;
+  }
+
+  if (/omzet|penjualan|laku|untung|margin|laba|pendapatan/.test(q)) {
+    if (!state.sales.length) return `Belum ada transaksi tercatat di ${state.business.name}. Omzet dan laba akan muncul setelah transaksi pertama disimpan.`;
+    const revenue = state.sales.reduce((total, sale) => total + sale.total, 0);
+    const costs = estimatedCosts(state.sales, state);
+    const gross = revenue - costs;
+    const margin = revenue ? (gross / revenue) * 100 : 0;
+    return `Dari ${state.sales.length} transaksi tercatat, omzet ${currency(revenue)} dengan estimasi HPP ${currency(costs)} berdasarkan resep saat ini. Laba kotor ${currency(gross)} (${margin.toFixed(1)}%), sebelum biaya operasional.`;
+  }
+
+  return `Halo ${ownerName}! Saya bisa membantu membaca omzet, produk terlaris, stok yang menipis, pelanggan, dan estimasi laba dari data ${state.business.name}. Tanyakan salah satu topik tersebut.`;
+}
+
 export async function POST(request: NextRequest) {
   const start = Date.now();
-  let question = "";
-  let history: { role: "user" | "assistant"; text: string }[] = [];
-
+  let input: z.infer<typeof requestSchema>;
   try {
-    const body = await request.json();
-    question = typeof body.question === "string" ? body.question.trim() : "";
-    if (Array.isArray(body.history)) {
-      history = body.history.filter((m: { role: string; text: string }) => (m.role === "user" || m.role === "assistant") && typeof m.text === "string");
-    }
+    input = requestSchema.parse(await request.json());
   } catch {
-    return NextResponse.json({ error: "Permintaan tidak valid." }, { status: 400 });
+    return NextResponse.json({ error: "Pertanyaan tidak valid. Gunakan teks 1–2000 karakter dan riwayat percakapan yang sesuai." }, { status: 400 });
   }
 
-  if (!question) {
-    return NextResponse.json({ error: "Pertanyaan tidak boleh kosong." }, { status: 400 });
-  }
-
-  // Load active data state: either from Supabase user session or demo initial state
-  let state = createInitialState();
-  let businessName = state.business.name;
-  let ownerName = state.business.owner;
-
+  let context: AiContext;
   try {
-    const supabase = await createClient();
-    const snapshot = await loadSnapshot(supabase);
-    if (snapshot) {
-      state = snapshot.state;
-      businessName = state.business.name;
-      ownerName = state.business.owner;
-    }
-  } catch {
-    // Keep demo state if unauthenticated or offline
+    context = await requireAiContext(input.mode);
+  } catch (error) {
+    return aiErrorResponse(error, "Data workspace belum dapat dimuat. Coba lagi.");
   }
-
+  const { state } = context;
   const googleSetup = getGoogleModel();
+  if (!googleSetup) return NextResponse.json({ answer: localAnswer(input.question, state), source: "local-rules" });
 
-  // Deterministic fallback if no Gemini key configured
-  if (!googleSetup) {
-    const q = question.toLowerCase();
-    let answer = `Halo ${ownerName}! Saya adalah asisten cerdas Laris. Kamu bisa bertanya tentang omzet, stok bahan menipis, produk terlaris, atau keuntungan usaha ${businessName}.`;
-
-    const totalRevenue = state.sales.reduce((acc, s) => acc + s.total, 0);
-    const lowStockItems = inventory.filter((item) => {
-      const currentStock = state.stockMovements
-        .filter((m) => m.itemId === item.id)
-        .reduce((sum, m) => sum + m.quantity, item.openingStock);
-      return currentStock <= item.reorderPoint;
-    });
-
-    if (/stok|bahan|habis|menipis|susu|kopi/.test(q)) {
-      answer = `Ada ${lowStockItems.length} bahan yang perlu segera diperhatikan untuk ${businessName}: ${lowStockItems.map((i) => i.name).join(", ")}. Prioritaskan belanja sebelum kedai ramai.`;
-    } else if (/omzet|penjualan|laku|untung|margin|laba/.test(q)) {
-      answer = `Total penjualan tercatat di sistem saat ini adalah Rp${totalRevenue.toLocaleString("id-ID")} dari ${state.sales.length} transaksi. Rata-rata margin kotor terjaga di sekitar 62%.`;
-    } else if (/laris|favorit|menu|paling/.test(q)) {
-      answer = `Menu paling laris adalah Es Kopi Susu dengan porsi terbanyak, disusul Butter Croissant. Rekomendasi: tawarkan paket combo kopi + pastry untuk meningkatkan nilai rata-rata transaksi.`;
-    }
-
-    return NextResponse.json({
-      answer,
-      source: "local-rules",
-    });
-  }
-
+  const periodSales = (days: number) => salesInPeriod(state.sales, context.today, days);
   try {
-    // Typed tools giving real analytical data from the business ledger
     const tools = {
       getRevenueSummary: tool({
-        description: "Menghitung omzet penjualan, total transaksi, dan rata-rata belanja dalam rentang hari terakhir",
-        inputSchema: z.object({
-          days: z.number().int().min(1).max(90).default(7).describe("Rentang hari ke belakang (misal 1 untuk hari ini, 7 untuk seminggu, 30 untuk sebulan)"),
-        }),
+        description: "Menghitung omzet, jumlah transaksi, dan rata-rata transaksi dalam rentang hari terakhir",
+        inputSchema: z.object({ days: z.number().int().min(1).max(90).default(7) }),
         execute: async ({ days }) => {
-          const sorted = [...state.sales].sort((a, b) => b.createdAt.localeCompare(a.createdAt));
-          const latestDate = sorted[0]?.createdAt.slice(0, 10) || "2026-10-18";
-          const cutoff = new Date(new Date(latestDate).getTime() - (days - 1) * 86400000).toISOString().slice(0, 10);
-          const filtered = sorted.filter((s) => s.createdAt.slice(0, 10) >= cutoff);
-          const total = filtered.reduce((acc, s) => acc + s.total, 0);
+          const sales = periodSales(days);
+          const total = sales.reduce((sum, sale) => sum + sale.total, 0);
           return {
             periodDays: days,
+            startDate: new Date(new Date(`${context.today}T00:00:00Z`).getTime() - (days - 1) * 86400000).toISOString().slice(0, 10),
+            endDate: context.today,
             totalRevenue: total,
-            totalRevenueFormatted: `Rp${total.toLocaleString("id-ID")}`,
-            transactionCount: filtered.length,
-            averageOrderValue: filtered.length ? Math.round(total / filtered.length) : 0,
+            totalRevenueFormatted: currency(total),
+            transactionCount: sales.length,
+            averageOrderValue: sales.length ? Math.round(total / sales.length) : 0,
           };
         },
       }),
-
+      getProfitSummary: tool({
+        description: "Menghitung estimasi laba kotor dari omzet dan HPP resep saat ini, sebelum biaya operasional",
+        inputSchema: z.object({ days: z.number().int().min(1).max(90).default(7) }),
+        execute: async ({ days }) => {
+          const sales = periodSales(days);
+          const revenue = sales.reduce((sum, sale) => sum + sale.total, 0);
+          const costs = estimatedCosts(sales, state);
+          const grossProfit = revenue - costs;
+          return {
+            periodDays: days,
+            revenue,
+            estimatedCogs: costs,
+            grossProfit,
+            grossProfitFormatted: currency(grossProfit),
+            marginPercent: revenue ? Math.round((grossProfit / revenue) * 1000) / 10 : 0,
+            note: "HPP memakai resep dan biaya bahan saat ini; laba kotor belum dikurangi biaya operasional.",
+          };
+        },
+      }),
       getTopSellingProducts: tool({
-        description: "Melihat daftar produk menu yang paling banyak terjual dan nilai kontribusinya",
-        inputSchema: z.object({
-          limit: z.number().int().min(1).max(10).default(5),
-        }),
-        execute: async ({ limit }) => {
-          const counts = new Map<string, { quantity: number; revenue: number }>();
-          for (const sale of state.sales) {
-            for (const item of sale.items) {
-              const prev = counts.get(item.productId) || { quantity: 0, revenue: 0 };
-              const p = products.find((prod) => prod.id === item.productId);
-              counts.set(item.productId, {
-                quantity: prev.quantity + item.quantity,
-                revenue: prev.revenue + item.quantity * (p?.price || 0),
-              });
-            }
-          }
-          const sorted = Array.from(counts.entries())
-            .map(([id, stats]) => ({
-              productId: id,
-              name: products.find((p) => p.id === id)?.name || id,
-              quantitySold: stats.quantity,
-              revenue: stats.revenue,
-              revenueFormatted: `Rp${stats.revenue.toLocaleString("id-ID")}`,
-            }))
-            .sort((a, b) => b.quantitySold - a.quantitySold)
-            .slice(0, limit);
-          return sorted;
-        },
+        description: "Melihat produk terlaris berdasarkan jumlah item dari seluruh transaksi yang tercatat",
+        inputSchema: z.object({ limit: z.number().int().min(1).max(10).default(5) }),
+        execute: async ({ limit }) => productRanking(state).slice(0, limit),
       }),
-
       getLowStockAlerts: tool({
-        description: "Memeriksa stok bahan baku yang berada di bawah atau mendekati batas aman (reorder point)",
+        description: "Memeriksa bahan baku yang berada di bawah atau sama dengan batas minimum stok",
         inputSchema: z.object({}),
-        execute: async () => {
-          const results = inventory.map((item) => {
-            const currentStock = state.stockMovements
-              .filter((m) => m.itemId === item.id)
-              .reduce((sum, m) => sum + m.quantity, item.openingStock);
-            return {
-              id: item.id,
-              name: item.name,
-              currentStock,
-              reorderPoint: item.reorderPoint,
-              unit: item.unit,
-              isLow: currentStock <= item.reorderPoint,
-              supplier: item.supplier,
-            };
-          });
-          return results.filter((i) => i.isLow);
-        },
+        execute: async () => (state.inventory ?? []).map((item) => ({
+          id: item.id,
+          name: item.name,
+          currentStock: getStock(state, item.id),
+          reorderPoint: item.reorderPoint,
+          unit: item.unit,
+          supplier: item.supplier,
+        })).filter((item) => item.currentStock <= item.reorderPoint),
       }),
-
       getCustomerSegmentsSummary: tool({
-        description: "Melihat rincian segmentasi pelanggan RFM (Juara, Setia, Potensial, Berisiko, Hilang)",
+        description: "Melihat jumlah pelanggan per segmen RFM",
         inputSchema: z.object({}),
         execute: async () => {
-          const segs: Record<string, number> = { Juara: 0, Setia: 0, Potensial: 0, Berisiko: 0, Hilang: 0 };
-          for (const c of state.customers) {
-            segs[c.segment] = (segs[c.segment] || 0) + 1;
-          }
-          return {
-            totalCustomers: state.customers.length,
-            segments: segs,
-          };
+          const segments: Record<string, number> = { Juara: 0, Setia: 0, Potensial: 0, Berisiko: 0, Hilang: 0 };
+          for (const customer of state.customers) segments[customer.segment] = (segments[customer.segment] ?? 0) + 1;
+          return { totalCustomers: state.customers.length, segments };
         },
       }),
-
       getExpensesBreakdown: tool({
-        description: "Melihat pengeluaran operasional usaha berdasarkan kategori",
+        description: "Melihat pengeluaran operasional berdasarkan kategori dari seluruh catatan workspace",
         inputSchema: z.object({}),
         execute: async () => {
-          const byCategory: Record<string, number> = {};
+          const categories: Record<string, number> = {};
           let total = 0;
-          for (const exp of state.expenses) {
-            byCategory[exp.category] = (byCategory[exp.category] || 0) + exp.amount;
-            total += exp.amount;
+          for (const expense of state.expenses) {
+            categories[expense.category] = (categories[expense.category] ?? 0) + expense.amount;
+            total += expense.amount;
           }
-          return {
-            totalExpenses: total,
-            totalExpensesFormatted: `Rp${total.toLocaleString("id-ID")}`,
-            categories: byCategory,
-          };
+          return { totalExpenses: total, totalExpensesFormatted: currency(total), categories };
         },
       }),
     };
-
-    const messages = [
-      ...history.map((m) => ({
-        role: m.role as "user" | "assistant",
-        content: m.text,
-      })),
-      {
-        role: "user" as const,
-        content: question,
-      },
-    ];
 
     const result = await generateText({
       model: googleSetup.model,
       tools,
       stopWhen: isStepCount(4),
-      instructions: `Kamu adalah 'Tanya Laris' — asisten bisnis AI yang ramah, ringkas, dan solutif untuk ${ownerName}, pemilik ${businessName}.
-Bahasa: Bahasa Indonesia yang hangat, profesional namun santai (seperti partner bisnis terpercaya).
-Hindari jargon rumit. Bila menyebutkan nominal uang, gunakan format Rupiah yang mudah dibaca (misal: Rp25.000 atau 3,5 juta).
+      instructions: `Kamu adalah 'Tanya Laris', asisten bisnis untuk ${state.business.owner || "pemilik"} di ${state.business.name}.
+Jawab dalam Bahasa Indonesia yang hangat, ringkas, dan profesional. Gunakan format Rupiah yang mudah dibaca.
 
-${CATALOG_CONTEXT}
+${catalogContext(state)}
 
-Gunakan alat bantu (tools) yang disediakan untuk melihat data riil penjualan, stok, pelanggan, dan pengeluaran.
-Jangan menebak angka jika ada alat bantunya. Berikan rekomendasi praktis yang bisa langsung dilakukan pemilik kedai hari ini.`,
-      messages,
+Gunakan tools untuk membaca data workspace. Jangan menebak angka, transaksi, produk, atau stok.
+Jika data kosong, katakan dengan jujur dan sarankan langkah berikutnya. Jelaskan bahwa laba kotor adalah estimasi sebelum biaya operasional.
+Berikan rekomendasi praktis hanya berdasarkan data yang tersedia.`,
+      messages: [
+        ...input.history.map((message) => ({ role: message.role, content: message.text })),
+        { role: "user" as const, content: input.question },
+      ],
     });
+    if (!result.text.trim()) throw new Error("Model tidak menghasilkan jawaban.");
 
-    const latencyMs = Date.now() - start;
     await logAiTelemetry({
+      businessId: context.businessId,
       feature: "ask",
       model: googleSetup.modelId,
-      input: { questionLength: question.length },
+      input: { questionLength: input.question.length },
       output: { answerLength: result.text.length },
-      latencyMs,
+      latencyMs: Date.now() - start,
       ok: true,
     });
-
-    return NextResponse.json({
-      answer: result.text,
-      source: "gemini",
-      model: googleSetup.modelId,
-    });
+    return NextResponse.json({ answer: result.text, source: "gemini", model: googleSetup.modelId });
   } catch (error) {
-    const latencyMs = Date.now() - start;
     await logAiTelemetry({
+      businessId: context.businessId,
       feature: "ask",
       model: googleSetup.modelId,
-      input: { questionLength: question.length },
+      input: { questionLength: input.question.length },
       output: { error: error instanceof Error ? error.message : String(error) },
-      latencyMs,
+      latencyMs: Date.now() - start,
       ok: false,
     });
-
-    return NextResponse.json({
-      answer: "Mohon maaf, asisten AI sedang mengalami lonjakan trafik. Silakan tanyakan hal lain atau periksa menu laporan langsung di tab Keuangan dan Stok.",
-      source: "error-fallback",
-    });
+    return NextResponse.json({ error: "Asisten AI belum dapat menjawab. Coba lagi atau gunakan laporan di workspace." }, { status: 502 });
   }
 }

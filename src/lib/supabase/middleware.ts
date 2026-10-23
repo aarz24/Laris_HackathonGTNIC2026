@@ -26,12 +26,12 @@ export async function updateSession(request: NextRequest) {
   const signedIn = Boolean(data?.claims?.sub);
   const path = request.nextUrl.pathname;
 
-  if (!signedIn && path === "/") {
+  if (!signedIn && (path === "/" || path === "/onboarding")) {
     const url = request.nextUrl.clone();
     url.pathname = "/login";
     return NextResponse.redirect(url);
   }
-  if (signedIn && path === "/login") {
+  if (signedIn && (path === "/login" || path === "/register" || path === "/forgot-password")) {
     const url = request.nextUrl.clone();
     url.pathname = "/";
     return NextResponse.redirect(url);

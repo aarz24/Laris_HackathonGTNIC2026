@@ -1,12 +1,13 @@
 "use client";
 
+import Link from "next/link";
 import { useActionState } from "react";
 import { ArrowRight, Gavel, LoaderCircle, LockKeyhole, Mail, ShieldCheck, Sparkles } from "lucide-react";
 import { CafeIllustration, LarisMark } from "@/components/laris-visuals";
 import { judgeSignInAction, signInAction, type LoginState } from "./actions";
 import styles from "./login.module.css";
 
-export default function LoginForm({ initialError }: { initialError?: string }) {
+export default function LoginForm({ initialError, cloudConfigured, demoAvailable }: { initialError?: string; cloudConfigured: boolean; demoAvailable: boolean }) {
   const [state, signIn, signingIn] = useActionState<LoginState, FormData>(signInAction, { error: initialError });
   const [judgeState, judgeSignIn, judgePending] = useActionState<LoginState>(judgeSignInAction, {});
   const error = judgeState.error || state.error;
@@ -24,7 +25,7 @@ export default function LoginForm({ initialError }: { initialError?: string }) {
         <div className={styles.illustration} aria-hidden="true"><CafeIllustration /></div>
         <ul className={styles.trust}>
           <li><ShieldCheck size={15} />Data tiap usaha terisolasi (RLS)</li>
-          <li><LockKeyhole size={15} />Server di Singapura</li>
+          <li><LockKeyhole size={15} />Akses aman berbasis peran</li>
         </ul>
       </section>
 
@@ -33,31 +34,45 @@ export default function LoginForm({ initialError }: { initialError?: string }) {
           <h1>Selamat datang kembali</h1>
           <p className={styles.lead}>Masuk untuk melanjutkan ke dasbor usahamu.</p>
 
-          <form action={judgeSignIn}>
-            <button id="judge-login" className={styles.judge} disabled={busy}>
-              <span className={styles.judgeIcon}>{judgePending ? <LoaderCircle size={18} className={styles.spin} /> : <Gavel size={18} />}</span>
-              <span className={styles.judgeText}><strong>Masuk sebagai Juri</strong><small>Satu klik ke demo Kopi Senja, tanpa daftar</small></span>
-              <ArrowRight size={17} />
-            </button>
-          </form>
+          {!cloudConfigured ? (
+            <>
+              <p className={styles.notice} role="status">Login cloud belum dikonfigurasi di environment ini. Kamu tetap bisa mencoba seluruh alur dengan demo lokal.</p>
+              <Link className={styles.submit} href="/demo">Buka demo lokal<ArrowRight size={16} /></Link>
+              <p className={styles.footnote}>Isi kredensial Supabase di environment untuk mengaktifkan akun dan penyimpanan cloud.</p>
+            </>
+          ) : (
+            <>
+              {demoAvailable && (
+                <form action={judgeSignIn}>
+                  <button id="judge-login" className={styles.judge} disabled={busy}>
+                    <span className={styles.judgeIcon}>{judgePending ? <LoaderCircle size={18} className={styles.spin} /> : <Gavel size={18} />}</span>
+                    <span className={styles.judgeText}><strong>Masuk sebagai Juri</strong><small>Satu klik ke demo Kopi Senja, tanpa daftar</small></span>
+                    <ArrowRight size={17} />
+                  </button>
+                </form>
+              )}
 
-          <div className={styles.divider}><span>atau dengan email</span></div>
+              {demoAvailable && <div className={styles.divider}><span>atau dengan email</span></div>}
 
-          <form action={signIn} noValidate>
-            <label className={styles.field}>
-              <span>Email</span>
-              <div className={styles.inputWrap}><Mail size={16} /><input id="login-email" name="email" type="email" autoComplete="email" required defaultValue={state.email} placeholder="nama@usaha.id" /></div>
-            </label>
-            <label className={styles.field}>
-              <span>Kata sandi</span>
-              <div className={styles.inputWrap}><LockKeyhole size={16} /><input id="login-password" name="password" type="password" autoComplete="current-password" required minLength={6} placeholder="••••••••" /></div>
-            </label>
-            {error && <p className={styles.error} role="alert">{error}</p>}
-            <button id="login-submit" className={styles.submit} disabled={busy}>
-              {signingIn ? <LoaderCircle size={16} className={styles.spin} /> : null}Masuk
-            </button>
-          </form>
-          <p className={styles.footnote}>Dengan masuk, kamu menyetujui pemrosesan data sesuai UU PDP.</p>
+              <form action={signIn} noValidate>
+                <label className={styles.field}>
+                  <span>Email</span>
+                  <div className={styles.inputWrap}><Mail size={16} /><input id="login-email" name="email" type="email" autoComplete="email" required defaultValue={state.email} placeholder="nama@usaha.id" /></div>
+                </label>
+                <label className={styles.field}>
+                  <span>Kata sandi</span>
+                  <div className={styles.inputWrap}><LockKeyhole size={16} /><input id="login-password" name="password" type="password" autoComplete="current-password" required minLength={6} placeholder="••••••••" /></div>
+                </label>
+                <div className={styles.formMeta}><Link href="/forgot-password">Lupa kata sandi?</Link></div>
+                {error && <p className={styles.error} role="alert">{error}</p>}
+                <button id="login-submit" className={styles.submit} disabled={busy}>
+                  {signingIn ? <LoaderCircle size={16} className={styles.spin} /> : null}Masuk
+                </button>
+              </form>
+              <p className={styles.signup}>Belum punya akun? <Link href="/register">Daftar dan buat workspace</Link></p>
+            </>
+          )}
+          <p className={styles.footnote}>Ingin mencoba tanpa akun? <Link href="/demo">Buka demo lokal</Link>. Data demo tidak masuk ke akun usaha.</p>
         </div>
       </section>
     </main>

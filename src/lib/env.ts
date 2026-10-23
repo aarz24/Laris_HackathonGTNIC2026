@@ -14,9 +14,11 @@ export function serverEnv() {
   return {
     demoEmail: process.env.LARIS_DEMO_EMAIL?.trim() || "",
     demoPassword: process.env.LARIS_DEMO_PASSWORD || "",
+    serviceRoleKey: process.env.SUPABASE_SERVICE_ROLE_KEY?.trim() || "",
+    appUrl: process.env.NEXT_PUBLIC_APP_URL?.trim() || "",
     googleKey: process.env.GOOGLE_GENERATIVE_AI_API_KEY?.trim() || "",
-    modelFast: process.env.LARIS_AI_MODEL_FAST?.trim() || "gemini-3.8-flash",
-    modelSmart: process.env.LARIS_AI_MODEL_SMART?.trim() || "gemini-3.8-flash",
+    modelFast: process.env.LARIS_AI_MODEL_FAST?.trim() || "gemini-2.5-flash",
+    modelSmart: process.env.LARIS_AI_MODEL_SMART?.trim() || "gemini-2.5-flash",
   };
 }
 

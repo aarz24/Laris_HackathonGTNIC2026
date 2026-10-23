@@ -6,7 +6,7 @@ import type { BusinessState, CartItem, Sale } from "./laris-data";
 // allowImportingTsExtensions change, while the type query preserves type checking.
 const {
   DEMO_DATE, products, inventory, createInitialState, currency, getStock,
-  getCartTotal, completeSale, recordPurchase, parseOrder, exportSalesCsv,
+  getCartTotal, completeSale, recordPurchase, parseOrder, exportSalesCsv, timestamp,
 }: typeof import("./laris-data") = await import(new URL("./laris-data.ts", import.meta.url).href);
 
 const seed = createInitialState();
@@ -28,6 +28,11 @@ function freezeDeep<T>(value: T): T {
 
 const oneCoffee: CartItem[] = [{ productId: "kopi-susu", quantity: 1 }];
 const cashInput = { items: oneCoffee, payment: "Tunai" as const, cashReceived: 50000 };
+
+test("timestamp preserves the active date at the UTC day boundary", (context) => {
+  context.mock.method(Date, "now", () => Date.parse("2026-10-18T17:30:00.000Z"));
+  assert.equal(timestamp("2026-10-18"), "2026-10-18T00:30:00.000+07:00");
+});
 
 // Small RFC 4180 reader verifies complete cell values, including multiline data.
 function readCsv(text: string): string[][] {
@@ -147,6 +152,21 @@ test("cart sums rupiah, rounds discount, taxes after discount and permits an emp
   assert.deepEqual(getCartTotal([], 0, true), { subtotal: 0, discount: 0, tax: 0, total: 0 });
 });
 
+test("custom restaurant catalogs drive totals, sales and stock without demo products", () => {
+  const state: BusinessState = {
+    ...emptyState(),
+    inventory: [{ id: "nasi", name: "Nasi matang", unit: "porsi", openingStock: 20, reorderPoint: 5, cost: 4000, supplier: "Dapur sendiri" }],
+    products: [{ id: "nasi-ayam", name: "Nasi Ayam Sambal Matah", category: "Makanan", price: 32000, cost: 8000, sold: 0, image: "", recipe: [{ itemId: "nasi", quantity: 1 }] }],
+  };
+  const items = [{ productId: "nasi-ayam", quantity: 2 }];
+  assert.deepEqual(getCartTotal(items, 0, false, state.products), { subtotal: 64000, discount: 0, tax: 0, total: 64000 });
+  const result = completeSale(freezeDeep(state), { items, payment: "QRIS", cashReceived: 0 });
+  assert.equal(result.sale.total, 64000);
+  assert.equal(getStock(result.state, "nasi"), 18);
+  assert.throws(() => getCartTotal(oneCoffee, 0, false, state.products), /Menu tidak dikenal/);
+  assert.throws(() => recordPurchase(state, { itemId: "milk", quantity: 1, total: 1000 }), /Bahan tidak dikenal/);
+});
+
 test("sale aggregates shared recipes and duplicate lines into one atomic movement per ingredient", () => {
   const state = freezeDeep(emptyState());
   const items: CartItem[] = [
@@ -164,7 +184,7 @@ test("sale aggregates shared recipes and duplicate lines into one atomic movemen
   assert.strictEqual(result.state.sales[0], result.sale);
   assert.equal(result.sale.channel, "Etalase");
   assert.equal(result.sale.status, "Lunas");
-  assert.equal(result.sale.createdAt.slice(0, 10), DEMO_DATE);
+  assert.match(result.sale.createdAt, new RegExp(`^${DEMO_DATE}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}\\+07:00$`));
   assert.equal(result.sale.cashReceived, result.sale.total);
   assert.equal(result.state.stockMovements.length, 6);
   for (const [id, used] of [["milk", 1080], ["beans", 108], ["syrup", 70], ["cups", 7], ["matcha-powder", 4], ["pastry", 3]] as const) {
@@ -302,6 +322,23 @@ test("purchase appends an immutable purchase and linked positive movement, prese
   assert.strictEqual(second.sales, persisted.sales);
 });
 
+test("custom purchases update moving-average cost and every dependent recipe HPP", () => {
+  const state: BusinessState = {
+    ...emptyState(),
+    inventory: [{ id: "tepung", name: "Tepung protein tinggi", unit: "g", openingStock: 1000, reorderPoint: 200, cost: 20, supplier: "Supplier Roti" }],
+    products: [
+      { id: "roti-tawar", name: "Roti Tawar", category: "Roti", price: 25000, cost: 10000, sold: 0, image: "", recipe: [{ itemId: "tepung", quantity: 500 }] },
+      { id: "bolu", name: "Bolu Pandan", category: "Kue", price: 30000, cost: 6000, sold: 0, image: "", recipe: [{ itemId: "tepung", quantity: 300 }] },
+    ],
+  };
+  const result = recordPurchase(freezeDeep(state), { itemId: "tepung", quantity: 1000, total: 40000 });
+  assert.equal(getStock(result, "tepung"), 2000);
+  assert.equal(result.inventory?.[0].cost, 30);
+  assert.deepEqual(result.products?.map((product) => product.cost), [15000, 9000]);
+  assert.equal(state.inventory?.[0].cost, 20);
+  assert.deepEqual(state.products?.map((product) => product.cost), [10000, 6000]);
+});
+
 test("invalid purchases cannot change either ledger", () => {
   const state = freezeDeep(emptyState());
   for (const value of [0, -1, NaN, Infinity, -Infinity, Number.MAX_SAFE_INTEGER + 1]) {
@@ -400,6 +437,22 @@ test("parser supports all nine menu families and is deterministic", () => {
   assert.deepEqual(result.unknown, []);
   assert.deepEqual(parseOrder(text), result);
   assert.deepEqual(parseOrder(" \n "), { items: [], payment: "Tunai", unknown: [] });
+});
+
+test("parser uses custom active products and never invents demo aliases", () => {
+  const catalog = [
+    { id: "nasi-goreng", name: "Nasi Goreng Kampung", category: "Makanan", price: 28000, cost: 12000, sold: 0, image: "", recipe: [] },
+    { id: "kopi-susu", name: "Es Kopi Susu", category: "Kopi", price: 25000, cost: 9000, sold: 0, image: "", recipe: [], active: false },
+    { id: "menu-gula", name: "Es Gula Uji", category: "Minuman", price: 12000, cost: 1400, sold: 0, image: "", recipe: [] },
+  ];
+  assert.deepEqual(parseOrder("dua nasi goreng kampung, satu es kopi susu, bayar QRIS", catalog), {
+    items: [{ productId: "nasi-goreng", quantity: 2 }], payment: "QRIS", unknown: ["satu es kopi susu"],
+  });
+  assert.deepEqual(parseOrder("dua es gula uji, bayar QRIS", catalog), {
+    items: [{ productId: "menu-gula", quantity: 2 }], payment: "QRIS", unknown: [],
+  });
+  assert.deepEqual(parseOrder("kopsu", catalog), { items: [], payment: "Tunai", unknown: ["kopsu"] });
+  assert.deepEqual(parseOrder("kopsu", []), { items: [], payment: "Tunai", unknown: ["kopsu"] });
 });
 
 test("parser never silently accepts unknown modifiers, mixed menus or payment phrases", () => {

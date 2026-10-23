@@ -9,6 +9,7 @@ export interface Product {
   sold: number;
   image: string;
   recipe: { itemId: string; quantity: number }[];
+  active?: boolean;
 }
 
 export interface InventoryItem {
@@ -78,6 +79,21 @@ export interface Purchase {
   createdAt: string;
 }
 
+export interface TeamMember {
+  id: string;
+  name: string;
+  email: string;
+  role: "owner" | "manager" | "kasir" | "dapur";
+}
+
+export interface AuditActivity {
+  id: string;
+  action: string;
+  entity: string;
+  createdAt: string;
+  actorName: string;
+}
+
 export interface BusinessState {
   version: 1;
   sales: Sale[];
@@ -85,8 +101,12 @@ export interface BusinessState {
   expenses: Expense[];
   customers: Customer[];
   purchases: Purchase[];
-  business: { name: string; owner: string; outlet: string };
+  business: { name: string; owner: string; outlet: string; kind?: string };
   dayTarget: number;
+  products?: Product[];
+  inventory?: InventoryItem[];
+  members?: TeamMember[];
+  activities?: AuditActivity[];
 }
 
 export const inventory: InventoryItem[] = [
@@ -120,14 +140,14 @@ export function currency(amount: number): string {
   return rupiah.format(amount);
 }
 
-function findProduct(id: string): Product {
-  const product = products.find((entry) => entry.id === id);
+function findProduct(id: string, catalog: Product[] = products): Product {
+  const product = catalog.find((entry) => entry.id === id);
   if (!product) throw new Error(`Menu tidak dikenal: ${String(id)}.`);
   return product;
 }
 
-function findInventory(id: string): InventoryItem {
-  const item = inventory.find((entry) => entry.id === id);
+function findInventory(id: string, items: InventoryItem[] = inventory): InventoryItem {
+  const item = items.find((entry) => entry.id === id);
   if (!item) throw new Error(`Bahan tidak dikenal: ${String(id)}.`);
   return item;
 }
@@ -138,30 +158,30 @@ function assertAmount(value: number, label: string, positive = false): void {
   }
 }
 
-function validateCart(items: CartItem[]): void {
+function validateCart(items: CartItem[], catalog: Product[] = products): void {
   if (!Array.isArray(items) || items.length === 0) throw new Error("Keranjang tidak boleh kosong.");
   for (const item of items) {
     if (!item || !Number.isSafeInteger(item.quantity) || item.quantity <= 0) {
       throw new Error("Jumlah menu harus berupa bilangan bulat positif yang aman.");
     }
-    findProduct(item.productId);
+    findProduct(item.productId, catalog);
     if (item.note !== undefined && typeof item.note !== "string") throw new Error("Catatan menu harus berupa teks.");
   }
 }
 
 export function getStock(state: BusinessState, itemId: string): number {
-  const item = findInventory(itemId);
+  const item = findInventory(itemId, state.inventory ?? inventory);
   return state.stockMovements.reduce((stock, movement) =>
     movement.itemId === itemId ? stock + movement.quantity : stock, item.openingStock);
 }
 
-export function getCartTotal(items: CartItem[], discount = 0, taxEnabled = false): {
+export function getCartTotal(items: CartItem[], discount = 0, taxEnabled = false, catalog: Product[] = products): {
   subtotal: number; discount: number; tax: number; total: number;
 } {
   // An empty cart is useful in the register; completeSale rejects it separately.
   if (!Array.isArray(items)) throw new Error("Keranjang tidak valid.");
-  if (items.length) validateCart(items);
-  const subtotal = items.reduce((sum, item) => sum + findProduct(item.productId).price * item.quantity, 0);
+  if (items.length) validateCart(items, catalog);
+  const subtotal = items.reduce((sum, item) => sum + findProduct(item.productId, catalog).price * item.quantity, 0);
   assertAmount(subtotal, "Subtotal");
   assertAmount(discount, "Diskon");
   if (discount > subtotal) throw new Error("Diskon tidak boleh melebihi subtotal.");
@@ -173,8 +193,9 @@ export function getCartTotal(items: CartItem[], discount = 0, taxEnabled = false
   return { subtotal, discount: roundedDiscount, tax, total };
 }
 
-function timestamp(): string {
-  return `${DEMO_DATE}T${new Date().toISOString().slice(11)}`;
+export function timestamp(date = DEMO_DATE): string {
+  const jakartaTime = new Date(Date.now() + 7 * 3600_000).toISOString().slice(11, 23);
+  return `${date}T${jakartaTime}+07:00`;
 }
 
 function nextId(prefix: string, entries: { id: string }[]): string {
@@ -216,8 +237,9 @@ export function completeSale(state: BusinessState, input: {
     id = nextId(`sale-${DEMO_DATE}`, state.sales);
   }
 
-  validateCart(input.items);
-  const totals = getCartTotal(input.items, input.discount, input.taxEnabled);
+  const catalog = state.products ?? products;
+  validateCart(input.items, catalog);
+  const totals = getCartTotal(input.items, input.discount, input.taxEnabled, catalog);
   if (!["Tunai", "QRIS", "Transfer"].includes(input.payment)) throw new Error("Metode pembayaran tidak valid.");
   const channel = input.channel ?? "Kasir";
   if (channel !== "Kasir" && channel !== "Etalase") throw new Error("Kanal penjualan tidak valid.");
@@ -239,7 +261,7 @@ export function completeSale(state: BusinessState, input: {
 
   const needed = new Map<string, number>();
   for (const item of input.items) {
-    for (const ingredient of findProduct(item.productId).recipe) {
+    for (const ingredient of findProduct(item.productId, catalog).recipe) {
       const quantity = (needed.get(ingredient.itemId) ?? 0) + ingredient.quantity * item.quantity;
       assertAmount(quantity, "Kebutuhan bahan", true);
       needed.set(ingredient.itemId, quantity);
@@ -248,7 +270,7 @@ export function completeSale(state: BusinessState, input: {
   // Validate the entire aggregated recipe before constructing any ledger entries.
   for (const [itemId, quantity] of needed) {
     if (getStock(state, itemId) < quantity) {
-      const item = findInventory(itemId);
+      const item = findInventory(itemId, state.inventory ?? inventory);
       throw new Error(`Stok ${item.name} tidak cukup. Tersedia ${getStock(state, itemId)} ${item.unit}, dibutuhkan ${quantity} ${item.unit}.`);
     }
   }
@@ -283,10 +305,11 @@ export function completeSale(state: BusinessState, input: {
 }
 
 export function recordPurchase(state: BusinessState, input: { itemId: string; quantity: number; total: number }): BusinessState {
-  findInventory(input.itemId);
+  const item = findInventory(input.itemId, state.inventory ?? inventory);
   assertAmount(input.quantity, "Jumlah pembelian", true);
   assertAmount(input.total, "Total pembelian", true);
-  assertAmount(getStock(state, input.itemId) + input.quantity, "Stok setelah pembelian");
+  const currentStock = getStock(state, input.itemId);
+  assertAmount(currentStock + input.quantity, "Stok setelah pembelian");
   const purchase: Purchase = {
     id: nextId(`purchase-${DEMO_DATE}`, state.purchases), itemId: input.itemId,
     quantity: input.quantity, total: Math.round(input.total), createdAt: timestamp(),
@@ -295,7 +318,19 @@ export function recordPurchase(state: BusinessState, input: { itemId: string; qu
     id: `movement-${purchase.id}`, itemId: input.itemId, quantity: input.quantity,
     type: "purchase", reference: purchase.id, createdAt: purchase.createdAt,
   };
-  return { ...state, purchases: [...state.purchases, purchase], stockMovements: [...state.stockMovements, movement] };
+  const averageCost = Math.round(((Math.max(currentStock, 0) * item.cost) + purchase.total) / (Math.max(currentStock, 0) + input.quantity) * 10000) / 10000;
+  const nextInventory = (state.inventory ?? inventory).map((entry) => entry.id === item.id ? { ...entry, cost: averageCost } : entry);
+  const nextProducts = (state.products ?? products).map((product) => ({
+    ...product,
+    cost: Math.round(product.recipe.reduce((total, line) => total + (nextInventory.find((entry) => entry.id === line.itemId)?.cost ?? 0) * line.quantity, 0)),
+  }));
+  return {
+    ...state,
+    inventory: nextInventory,
+    products: nextProducts,
+    purchases: [...state.purchases, purchase],
+    stockMovements: [...state.stockMovements, movement],
+  };
 }
 
 /** Deterministic 90-day "Kopi Senja" history ending on `endDate` (the seed script anchors it to the real date). */
@@ -363,13 +398,15 @@ export function createInitialState(endDate: string = DEMO_DATE): BusinessState {
     // openingStock is the demo's remaining stock, not stock before historical sales.
     // Only new demo mutations append movements; history is deliberately not deducted.
     stockMovements: [], business: { name: "Kopi Senja", owner: "Raka", outlet: "Bandung, Dago" }, dayTarget: 3500000,
+    products: products.map((product) => ({ ...product, recipe: product.recipe.map((line) => ({ ...line })) })),
+    inventory: inventory.map((item) => ({ ...item })),
   };
 }
 
 const numberWords: Record<string, number> = {
   satu: 1, dua: 2, tiga: 3, empat: 4, lima: 5, enam: 6, tujuh: 7, delapan: 8, sembilan: 9, sepuluh: 10,
 };
-const menuAliases: Record<string, string> = {
+const demoMenuAliases: Record<string, string> = {
   "es kopi susu gula aren": "kopi-susu", "es kopi susu": "kopi-susu", "kopi susu": "kopi-susu", "es kopsu": "kopi-susu", kopsu: "kopi-susu",
   "butter croissant": "croissant", croissant: "croissant", "matcha latte": "matcha", "es matcha": "matcha", matcha: "matcha",
   "es americano": "americano", americano: "americano", "es amer": "americano", amer: "americano",
@@ -378,12 +415,26 @@ const menuAliases: Record<string, string> = {
   "iced chocolate": "chocolate", "es cokelat": "chocolate", "es coklat": "chocolate", chocolate: "chocolate", cokelat: "chocolate", coklat: "chocolate",
   "es teh melati": "tea", "teh melati": "tea", "iced tea": "tea", "es teh manis": "tea", "teh manis": "tea", "es teh": "tea", tea: "tea", teh: "tea",
 };
-const aliasPattern = Object.keys(menuAliases).sort((a, b) => b.length - a.length).join("|");
 const quantityPattern = `(?:\\d+|${Object.keys(numberWords).join("|")})`;
 const notePattern = "(?:less sugar|kurang gula|gula sedikit|sedikit gula|tanpa gula|less ice|sedikit es|tanpa es)";
-const orderPattern = new RegExp(`^(?:(${quantityPattern})\\s+(?:(?:gelas|cup|pcs|buah)\\s+)?)?(${aliasPattern})(?:\\s+(${quantityPattern}))?((?:\\s+${notePattern})*)$`);
 
-export function parseOrder(text: string): { items: CartItem[]; payment: Sale["payment"]; unknown: string[] } {
+function createOrderParser(catalog: Product[]) {
+  const available = catalog.filter((product) => product.active !== false);
+  const availableIds = new Set(available.map((product) => product.id));
+  const aliases: Record<string, string> = {};
+  for (const [alias, id] of Object.entries(demoMenuAliases)) if (availableIds.has(id)) aliases[alias] = id;
+  for (const product of available) {
+    for (const alias of [product.id, product.id.replace(/-/g, " "), product.name.toLowerCase().trim().replace(/\s+/g, " ")]) {
+      if (alias) aliases[alias] = product.id;
+    }
+  }
+  const aliasPattern = Object.keys(aliases).sort((a, b) => b.length - a.length).map((alias) => alias.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("|");
+  const orderPattern = aliasPattern ? new RegExp(`^(?:(${quantityPattern})\\s+(?:(?:gelas|cup|pcs|buah|porsi|piring)\\s+)?)?(${aliasPattern})(?:\\s+(${quantityPattern}))?((?:\\s+${notePattern})*)$`) : null;
+  return { aliases, orderPattern };
+}
+
+export function parseOrder(text: string, catalog: Product[] = products): { items: CartItem[]; payment: Sale["payment"]; unknown: string[] } {
+  const { aliases, orderPattern } = createOrderParser(catalog);
   const items: CartItem[] = [];
   const unknown: string[] = [];
   let payment: Sale["payment"] = "Tunai";
@@ -405,7 +456,7 @@ export function parseOrder(text: string): { items: CartItem[]; payment: Sale["pa
       clause = clause.slice(0, paymentMatch.index).trim();
       if (!clause) continue;
     }
-    const match = clause.match(orderPattern);
+    const match = orderPattern ? clause.match(orderPattern) : null;
     if (!match || (match[1] && match[3])) {
       unknown.push(original);
       continue;
@@ -417,7 +468,7 @@ export function parseOrder(text: string): { items: CartItem[]; payment: Sale["pa
       continue;
     }
     const notes = match[4].trim().replace(/kurang gula|gula sedikit|sedikit gula/g, "less sugar");
-    items.push({ productId: menuAliases[match[2]], quantity, ...(notes ? { note: notes } : {}) });
+    items.push({ productId: aliases[match[2]], quantity, ...(notes ? { note: notes } : {}) });
   }
   return { items, payment, unknown };
 }
@@ -434,7 +485,7 @@ export function exportSalesCsv(state: BusinessState): string {
   for (const sale of state.sales) {
     rows.push([
       sale.id, sale.createdAt, sale.customerName,
-      sale.items.map((item) => `${item.quantity}× ${findProduct(item.productId).name}${item.note ? ` (${item.note})` : ""}`).join("; "),
+      sale.items.map((item) => `${item.quantity}× ${(state.products ?? products).find((product) => product.id === item.productId)?.name ?? item.productId}${item.note ? ` (${item.note})` : ""}`).join("; "),
       sale.subtotal, sale.discount, sale.tax, sale.total, sale.payment, sale.cashReceived, sale.channel, sale.status,
     ]);
   }

@@ -146,6 +146,13 @@
 .inputWrap input { flex: 1; border: 0; outline: 0; background: transparent; padding: 13px 0; font: inherit; font-size: 14px; color: var(--foreground); }
 
 .error { background: var(--red-light); color: var(--red-dark); border: 1px solid var(--red-border); border-radius: 10px; padding: 11px 14px; font-size: 13px; line-height: 1.6; margin: 4px 0 16px; }
+.notice { background: var(--green-light); color: var(--green-dark); border: 1px solid var(--green-soft); border-radius: 10px; padding: 11px 14px; font-size: 13px; line-height: 1.6; margin: 4px 0 16px; }
+.formMeta { display: flex; justify-content: flex-end; margin: -4px 0 16px; font-size: 12px; }
+.formMeta a, .signup a, .footnote a { color: var(--green); font-weight: 600; text-decoration: none; }
+.formMeta a:hover, .signup a:hover, .footnote a:hover { text-decoration: underline; }
+.signup { margin: 18px 0 0; text-align: center; color: var(--text-secondary); font-size: 13px; }
+.simplePage { min-height: 100dvh; display: grid; place-items: center; padding: 32px 20px; background: radial-gradient(700px 400px at 80% 10%, var(--saffron-light), transparent 65%), var(--background); }
+.simplePage .card { max-width: 440px; }
 
 .submit {
   width: 100%;
@@ -167,7 +174,8 @@
 }
 .submit:hover:not(:disabled) { background: var(--green-dark); transform: translateY(-1px); box-shadow: 0 8px 20px var(--shadow-green); }
 .submit:disabled { opacity: 0.7; cursor: progress; }
-.footnote { margin: 20px 0 0; font-size: 11px; color: var(--muted); text-align: center; }
+.footnote { margin: 20px 0 0; font-size: 11px; color: var(--muted); text-align: center; line-height: 1.7; }
+.footnote a { display: inline-flex; align-items: center; gap: 4px; }
 
 .spin { animation: spin 0.9s linear infinite; }
 @keyframes spin { to { transform: rotate(360deg); } }
