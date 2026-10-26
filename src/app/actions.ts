@@ -2,6 +2,7 @@
 
 import { revalidatePath } from "next/cache";
 import { z } from "zod";
+import type { SupabaseClient } from "@supabase/supabase-js";
 import { appOrigin } from "@/lib/app-url";
 import { isCloudConfigured } from "@/lib/env";
 import type { Customer, Expense, InventoryItem, Product, Purchase, Sale, StockMovement, TeamMember } from "@/lib/laris-data";
@@ -71,7 +72,7 @@ export async function completeSaleAction(raw: z.input<typeof saleInput>): Promis
       supabase.from("sales_order").select(ORDER_SELECT).eq("id", orderId).single(),
       supabase.from("stock_movement").select(MOVEMENT_SELECT).eq("ref_id", orderId).eq("type", "sale"),
       input.customerPhone
-        ? supabase.from("customer").select(CUSTOMER_SELECT).eq("business_id", membership.businessId).eq("phone", input.customerPhone.replace(/^\+/, "")).maybeSingle()
+        ? supabase.from("customer").select(CUSTOMER_SELECT).eq("business_id", membership.businessId).eq("phone", input.customerPhone.replace(/^\+/, "")).is("deleted_at", null).maybeSingle()
         : Promise.resolve({ data: null, error: null }),
     ]);
     if (order.error) throw new Error(order.error.message);
@@ -151,10 +152,23 @@ export async function addCustomerAction(raw: z.input<typeof customerInput>): Pro
   return run(async () => {
     const input = customerInput.parse(raw);
     const { supabase, membership } = await context(["owner", "manager", "kasir"]);
+    const phone = input.phone.replace(/^\+/, "");
     const { data, error } = await supabase.from("customer")
-      .insert({ business_id: membership.businessId, name: input.name, phone: input.phone.replace(/^\+/, "") })
+      .insert({ business_id: membership.businessId, name: input.name, phone })
       .select(CUSTOMER_SELECT).single();
-    if (error) throw new Error(error.code === "23505" ? "Nomor telepon ini sudah terdaftar." : error.message);
+    if (error?.code === "23505") {
+      // The phone may belong to a soft-deleted profile (unique per business). Revive it instead of failing,
+      // mirroring complete_sale which also restores deleted customers on checkout.
+      const { data: revived, error: reviveError } = await supabase.from("customer")
+        .update({ name: input.name, deleted_at: null })
+        .eq("business_id", membership.businessId).eq("phone", phone).not("deleted_at", "is", null)
+        .select(CUSTOMER_SELECT).maybeSingle();
+      if (reviveError) throw new Error(reviveError.message);
+      if (!revived) throw new Error("Nomor telepon ini sudah terdaftar.");
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      return mapCustomer(revived as any);
+    }
+    if (error) throw new Error(error.message);
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     return mapCustomer(data as any);
   });
@@ -166,15 +180,26 @@ const settingsInput = z.object({
   outlet: z.string().trim().min(1).max(80),
   dayTarget: z.number().int().min(1).max(1_000_000_000_000),
   kind: z.enum(["coffee", "restaurant", "bakery", "bar", "other"]).optional(),
+  taxRate: z.number().min(0).max(100).default(10),
+  receiptFooter: z.string().trim().max(200).optional(),
 });
 
 export async function updateSettingsAction(raw: z.input<typeof settingsInput>): Promise<ActionResult<z.output<typeof settingsInput>>> {
   return run(async () => {
     const input = settingsInput.parse(raw);
     const { supabase, membership } = await context(["owner"]);
+    const { data: current, error: currentError } = await supabase.from("business").select("settings").eq("id", membership.businessId).single();
+    if (currentError) throw new Error(currentError.message);
+    // Merge so keys written elsewhere (onboarding, future features) are preserved.
+    const existing = (current?.settings && typeof current.settings === "object" ? current.settings : {}) as Record<string, unknown>;
     const { error } = await supabase.from("business").update({
       name: input.name, owner_name: input.owner, day_target: input.dayTarget,
-      ...(input.kind ? { settings: { kind: input.kind } } : {}),
+      settings: {
+        ...existing,
+        ...(input.kind ? { kind: input.kind } : {}),
+        taxRate: input.taxRate,
+        receiptFooter: input.receiptFooter ?? "",
+      },
     }).eq("id", membership.businessId);
     if (error) throw new Error(error.message);
     const { data: outlet, error: outletLookupError } = await supabase.from("outlet").select("id").eq("business_id", membership.businessId).is("deleted_at", null).order("created_at").limit(1).maybeSingle();
@@ -225,7 +250,10 @@ export async function uploadMenuImageAction(form: FormData): Promise<ActionResul
     if (!ext) throw new Error("Format gambar harus JPG, PNG, WebP, atau GIF.");
     if (file.size > 5 * 1024 * 1024) throw new Error("Ukuran gambar maksimal 5 MB.");
     const { membership } = await context(["owner", "manager"]);
-    const admin = createAdminClient();
+    const admin = (() => {
+      try { return createAdminClient(); }
+      catch { throw new Error("Gagal mengunggah gambar. Pastikan SUPABASE_SERVICE_ROLE_KEY sudah dikonfigurasi di server."); }
+    })();
     const path = `${membership.businessId}/${crypto.randomUUID()}.${ext}`;
     const { error } = await admin.storage.from(MENU_IMAGE_BUCKET).upload(path, file, { contentType: file.type, upsert: false });
     if (error) throw new Error(error.message);
@@ -287,7 +315,10 @@ export async function inviteTeamMemberAction(raw: z.input<typeof inviteInput>): 
     let data = initialData;
     let invited = false;
     if (!data) {
-      const admin = createAdminClient();
+      const admin = (() => {
+        try { return createAdminClient(); }
+        catch { throw new Error("Undangan email belum dikonfigurasi. Minta anggota mendaftar lebih dulu, lalu tambahkan emailnya kembali."); }
+      })();
       const { error: inviteError } = await admin.auth.admin.inviteUserByEmail(input.email, {
         redirectTo: `${await appOrigin()}/auth/callback?next=/`, data: { full_name: input.email.split("@")[0] },
       });
@@ -305,5 +336,103 @@ export async function inviteTeamMemberAction(raw: z.input<typeof inviteInput>): 
       invited,
       alreadyMember: !result.created,
     };
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Correction paths: soft deletes and edits (migration 0007)
+// ---------------------------------------------------------------------------
+
+/** The UI catalog identifies rows by code; resolve it to the row id the RPCs expect. */
+async function resolveCatalogRowId(supabase: SupabaseClient, businessId: string, table: "product" | "inventory_item", codeValue: string): Promise<string> {
+  const { data, error } = await supabase.from(table).select("id").eq("business_id", businessId).eq("code", codeValue).is("deleted_at", null).maybeSingle();
+  if (error) throw new Error(error.message);
+  const id = (data as { id: string } | null)?.id;
+  if (!id) throw new Error(table === "product" ? "Menu tidak ditemukan." : "Bahan tidak ditemukan.");
+  return id;
+}
+
+export async function deleteProductAction(raw: { code: string }): Promise<ActionResult<{ products: Product[]; inventory: InventoryItem[] }>> {
+  return run(async () => {
+    const input = z.object({ code }).parse(raw);
+    const { supabase, membership } = await context(["owner", "manager"]);
+    const productId = await resolveCatalogRowId(supabase, membership.businessId, "product", input.code);
+    const { error } = await supabase.rpc("delete_product", { p_business_id: membership.businessId, p_product_id: productId });
+    if (error) throw new Error(error.message);
+    const catalog = await loadCatalog(supabase, membership.businessId);
+    revalidatePath("/");
+    return catalog;
+  });
+}
+
+export async function deleteInventoryItemAction(raw: { code: string }): Promise<ActionResult<{ products: Product[]; inventory: InventoryItem[] }>> {
+  return run(async () => {
+    const input = z.object({ code }).parse(raw);
+    const { supabase, membership } = await context(["owner", "manager"]);
+    const itemId = await resolveCatalogRowId(supabase, membership.businessId, "inventory_item", input.code);
+    const { error } = await supabase.rpc("delete_inventory_item", { p_business_id: membership.businessId, p_item_id: itemId });
+    if (error) throw new Error(error.message);
+    const catalog = await loadCatalog(supabase, membership.businessId);
+    revalidatePath("/");
+    return catalog;
+  });
+}
+
+export async function deleteCustomerAction(raw: { id: string }): Promise<ActionResult<{ id: string }>> {
+  return run(async () => {
+    const input = z.object({ id: z.string().uuid() }).parse(raw);
+    const { supabase, membership } = await context(["owner", "manager"]);
+    const { error } = await supabase.rpc("delete_customer", { p_business_id: membership.businessId, p_customer_id: input.id });
+    if (error) throw new Error(error.message);
+    return { id: input.id };
+  });
+}
+
+export async function deleteExpenseAction(raw: { id: string }): Promise<ActionResult<{ id: string }>> {
+  return run(async () => {
+    const input = z.object({ id: z.string().uuid() }).parse(raw);
+    const { supabase, membership } = await context(["owner", "manager"]);
+    const { error } = await supabase.rpc("delete_expense", { p_business_id: membership.businessId, p_expense_id: input.id });
+    if (error) throw new Error(error.message);
+    return { id: input.id };
+  });
+}
+
+export async function updateCustomerAction(raw: { id: string; name: string; phone: string }): Promise<ActionResult<Customer>> {
+  return run(async () => {
+    const input = z.object({ id: z.string().uuid(), ...customerInput.shape }).parse(raw);
+    const { supabase, membership } = await context(["owner", "manager", "kasir"]);
+    const { error } = await supabase.rpc("update_customer", {
+      p_business_id: membership.businessId, p_customer_id: input.id, p_name: input.name, p_phone: input.phone,
+    });
+    if (error) throw new Error(error.message);
+    const { data, error: fetchError } = await supabase.from("customer").select(CUSTOMER_SELECT).eq("id", input.id).is("deleted_at", null).single();
+    if (fetchError) throw new Error(fetchError.message);
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    return mapCustomer(data as any);
+  });
+}
+
+export async function removeTeamMemberAction(raw: { userId: string }): Promise<ActionResult<{ userId: string }>> {
+  return run(async () => {
+    const input = z.object({ userId: z.string().uuid() }).parse(raw);
+    const { supabase, membership } = await context(["owner"]);
+    const { error } = await supabase.rpc("remove_team_member", { p_business_id: membership.businessId, p_user_id: input.userId });
+    if (error) throw new Error(error.message);
+    revalidatePath("/");
+    return { userId: input.userId };
+  });
+}
+
+export async function updateTeamMemberRoleAction(raw: { userId: string; role: "manager" | "kasir" | "dapur" }): Promise<ActionResult<{ userId: string; role: "manager" | "kasir" | "dapur" }>> {
+  return run(async () => {
+    const input = z.object({ userId: z.string().uuid(), role: z.enum(["manager", "kasir", "dapur"]) }).parse(raw);
+    const { supabase, membership } = await context(["owner"]);
+    const { error } = await supabase.rpc("update_team_member_role", {
+      p_business_id: membership.businessId, p_user_id: input.userId, p_new_role: input.role,
+    });
+    if (error) throw new Error(error.message);
+    revalidatePath("/");
+    return { userId: input.userId, role: input.role };
   });
 }

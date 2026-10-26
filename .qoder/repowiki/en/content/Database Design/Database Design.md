@@ -7,7 +7,17 @@
 - [0003_functions.sql](file://supabase/migrations/0003_functions.sql)
 - [0004_workspaces.sql](file://supabase/migrations/0004_workspaces.sql)
 - [0005_production_hardening.sql](file://supabase/migrations/0005_production_hardening.sql)
+- [0006_storage.sql](file://supabase/migrations/0006_storage.sql)
 </cite>
+
+## Update Summary
+**Changes Made**
+- Added comprehensive storage bucket configuration for menu images
+- Enhanced production hardening with business-level locking and idempotency
+- Expanded workspace management with team member functionality
+- Strengthened data integrity constraints and validation rules
+- Updated Row-Level Security policies for improved tenant isolation
+- Added audit logging and AI event tracking capabilities
 
 ## Table of Contents
 1. [Introduction](#introduction)
@@ -27,6 +37,8 @@ This document describes the Laris database design as implemented through Supabas
 - Multi-tenancy using `business_id` partitioning and Row-Level Security policies.
 - Transactional functions that enforce atomicity, validation, and tenant isolation.
 - Indexing strategies, constraints, and production hardening patterns.
+- Storage bucket configuration for menu image management.
+- Team member management and workspace onboarding capabilities.
 
 The schema follows these conventions:
 - Every tenant-scoped table carries a `business_id`.
@@ -40,12 +52,13 @@ The schema follows these conventions:
 - [0001_schema.sql:1-7](file://supabase/migrations/0001_schema.sql#L1-L7)
 
 ## Project Structure
-The database design is defined by five migration files:
+The database design is defined by six migration files:
 - Schema definition and core tables.
 - Row-Level Security policies.
 - Transactional functions for POS checkout and purchasing.
 - Workspace onboarding and catalog management helpers.
 - Production hardening with idempotency, finite numeric checks, and catalog write locks.
+- Storage bucket configuration for menu images.
 
 ```mermaid
 graph TB
@@ -55,11 +68,13 @@ M2["0002_rls.sql"]
 M3["0003_functions.sql"]
 M4["0004_workspaces.sql"]
 M5["0005_production_hardening.sql"]
+M6["0006_storage.sql"]
 end
 M1 --> M2
 M2 --> M3
 M3 --> M4
 M4 --> M5
+M5 --> M6
 ```
 
 **Diagram sources**
@@ -68,6 +83,7 @@ M4 --> M5
 - [0003_functions.sql:1-320](file://supabase/migrations/0003_functions.sql#L1-L320)
 - [0004_workspaces.sql:1-346](file://supabase/migrations/0004_workspaces.sql#L1-L346)
 - [0005_production_hardening.sql:1-395](file://supabase/migrations/0005_production_hardening.sql#L1-L395)
+- [0006_storage.sql:1-9](file://supabase/migrations/0006_storage.sql#L1-L9)
 
 **Section sources**
 - [0001_schema.sql:1-294](file://supabase/migrations/0001_schema.sql#L1-L294)
@@ -75,6 +91,7 @@ M4 --> M5
 - [0003_functions.sql:1-320](file://supabase/migrations/0003_functions.sql#L1-L320)
 - [0004_workspaces.sql:1-346](file://supabase/migrations/0004_workspaces.sql#L1-L346)
 - [0005_production_hardening.sql:1-395](file://supabase/migrations/0005_production_hardening.sql#L1-L395)
+- [0006_storage.sql:1-9](file://supabase/migrations/0006_storage.sql#L1-L9)
 
 ## Core Components
 This section summarizes the main entity groups and their responsibilities.
@@ -108,14 +125,19 @@ This section summarizes the main entity groups and their responsibilities.
   - `ai_event`: AI feature telemetry.
   - `holiday_calendar`: shared reference data.
 
+- Storage
+  - Menu image storage bucket for product photos.
+
 Key design notes:
 - All monetary values are integers representing rupiah.
 - Quantities are `NUMERIC(14,3)`; costs are `NUMERIC(14,4)`.
 - Soft deletes are supported via `deleted_at` on many tables.
 - Stable human-readable codes exist for products and inventory items.
+- Production hardening includes business-level locking and idempotency protection.
 
 **Section sources**
 - [0001_schema.sql:24-284](file://supabase/migrations/0001_schema.sql#L24-L284)
+- [0006_storage.sql:1-9](file://supabase/migrations/0006_storage.sql#L1-L9)
 
 ## Architecture Overview
 The architecture enforces multi-tenancy and data integrity through:
@@ -124,6 +146,8 @@ The architecture enforces multi-tenancy and data integrity through:
 - SECURITY DEFINER functions for all ledger writes.
 - Immutable stock movement records ensuring auditable inventory history.
 - Triggers enforcing updated timestamps and tenant consistency.
+- Business-level locking to prevent concurrent catalog modifications.
+- Idempotency keys for safe retry operations.
 
 ```mermaid
 graph TB
@@ -132,16 +156,19 @@ RLS["Row-Level Security Policies"]
 Functions["Transactional Functions"]
 Tables["Public Tables"]
 Auth["Auth Users"]
+Storage["Storage Bucket"]
 Client --> Functions
 Functions --> Tables
 RLS --> Tables
 Functions --> Auth
+Client --> Storage
 ```
 
 **Diagram sources**
 - [0002_rls.sql:10-25](file://supabase/migrations/0002_rls.sql#L10-L25)
 - [0003_functions.sql:1-7](file://supabase/migrations/0003_functions.sql#L1-L7)
 - [0001_schema.sql:24-284](file://supabase/migrations/0001_schema.sql#L24-L284)
+- [0006_storage.sql:1-9](file://supabase/migrations/0006_storage.sql#L1-L9)
 
 ## Detailed Component Analysis
 
@@ -601,6 +628,18 @@ Key procedures ensure end-to-end consistency:
 - [0004_workspaces.sql:223-300](file://supabase/migrations/0004_workspaces.sql#L223-L300)
 - [0004_workspaces.sql:302-333](file://supabase/migrations/0004_workspaces.sql#L302-L333)
 
+### Storage Management
+Menu image storage is configured through a dedicated storage bucket:
+- Bucket name: `menu-images`
+- Public access enabled for direct image rendering
+- File size limit: 5MB
+- Supported MIME types: JPEG, PNG, WebP, GIF
+- Images are uploaded through server actions with service role privileges
+- No storage object policies required due to public bucket configuration
+
+**Section sources**
+- [0006_storage.sql:1-9](file://supabase/migrations/0006_storage.sql#L1-L9)
+
 ## Dependency Analysis
 The database schema exhibits clear dependency chains:
 - Catalog dependencies: product depends on business; product variant depends on product; recipe line depends on product variant and inventory item.
@@ -640,6 +679,7 @@ Business --> Membership["Membership"]
 - Concurrency and locking
   - Catalog writes lock the business row to prevent concurrent version skew during sales and catalog updates.
   - Idempotency keys prevent duplicate orders and purchases under concurrency or retries.
+  - Business-level locking ensures consistent catalog state across concurrent operations.
 - Backup procedures for production
   - Back up the entire database regularly, including schema, data, and functions.
   - Include transaction logs for point-in-time recovery.
@@ -648,8 +688,6 @@ Business --> Membership["Membership"]
   - Monitor slow queries on stock movement aggregation and sales reporting.
   - Vacuum and analyze tables frequently to maintain statistics.
   - Review index usage and remove unused indexes.
-
-[No sources needed since this section provides general guidance]
 
 ## Troubleshooting Guide
 Common issues and resolutions:
@@ -677,6 +715,10 @@ Common issues and resolutions:
   - Occur when NaN or Infinity values are inserted into numeric columns.
   - Sanitize inputs and rely on explicit constraints rejecting non-finite values.
 
+- Business locking conflicts
+  - Occur when concurrent catalog modifications attempt to modify the same business.
+  - Implement retry logic with exponential backoff for catalog operations.
+
 **Section sources**
 - [0003_functions.sql:122-162](file://supabase/migrations/0003_functions.sql#L122-L162)
 - [0003_functions.sql:254-282](file://supabase/migrations/0003_functions.sql#L254-L282)
@@ -684,6 +726,4 @@ Common issues and resolutions:
 - [0004_workspaces.sql:14-56](file://supabase/migrations/0004_workspaces.sql#L14-L56)
 
 ## Conclusion
-The Laris database design emphasizes secure multi-tenancy, strict data integrity, and auditable inventory tracking. Through `business_id` scoping, comprehensive RLS policies, and SECURITY DEFINER transactional functions, the system ensures tenant isolation and consistent state transitions. The immutable stock movement ledger provides a reliable foundation for cost accounting and inventory reconciliation. With targeted indexing, robust constraints, and production hardening measures, the schema supports scalable and safe operations in production environments.
-
-[No sources needed since this section summarizes without analyzing specific files]
+The Laris database design emphasizes secure multi-tenancy, strict data integrity, and auditable inventory tracking. Through `business_id` scoping, comprehensive RLS policies, and SECURITY DEFINER transactional functions, the system ensures tenant isolation and consistent state transitions. The immutable stock movement ledger provides a reliable foundation for cost accounting and inventory reconciliation. With targeted indexing, robust constraints, and production hardening measures including business-level locking and idempotency protection, the schema supports scalable and safe operations in production environments. The addition of storage bucket configuration and team member management capabilities further enhances the platform's functionality for real-world business operations.

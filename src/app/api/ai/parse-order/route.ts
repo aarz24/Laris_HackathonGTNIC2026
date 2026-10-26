@@ -3,6 +3,7 @@ import { generateText, Output } from "ai";
 import { z } from "zod";
 import { aiErrorResponse, catalogContext, getGoogleModel, logAiTelemetry, requireAiContext, type AiContext } from "@/lib/ai";
 import { parseOrder } from "@/lib/laris-data";
+import { aiRateLimit } from "@/lib/rate-limit";
 
 export const dynamic = "force-dynamic";
 
@@ -49,6 +50,9 @@ export async function POST(request: NextRequest) {
     if (audioBytes > MAX_AUDIO_BYTES) return NextResponse.json({ error: "Ukuran audio maksimal 8 MB." }, { status: 413 });
   }
 
+  const limited = await aiRateLimit(request, "parse-order", input.mode);
+  if (limited) return limited;
+
   let context: AiContext;
   try {
     context = await requireAiContext(input.mode, true);
@@ -59,10 +63,16 @@ export async function POST(request: NextRequest) {
   const catalog = (context.state.products ?? []).filter((product) => product.active !== false);
   if (!catalog.length) return NextResponse.json({ error: "Tambahkan menu aktif sebelum menggunakan pesanan suara." }, { status: 422 });
   const validProductIds = new Set(catalog.map((product) => product.id));
-  const googleSetup = getGoogleModel();
+  // Gemini only for authenticated cloud requests; local/demo mode always uses the local parser.
+  const googleSetup = context.allowGemini ? getGoogleModel() : null;
 
   if (!googleSetup) {
-    if (!text) return NextResponse.json({ error: "Pesanan audio membutuhkan konfigurasi Gemini. Gunakan input teks atau isi GOOGLE_GENERATIVE_AI_API_KEY." }, { status: 503 });
+    if (!text) {
+      const message = context.allowGemini
+        ? "Pesanan audio membutuhkan konfigurasi Gemini. Gunakan input teks atau isi GOOGLE_GENERATIVE_AI_API_KEY."
+        : "Pesanan suara hanya tersedia di mode cloud setelah masuk. Pada mode lokal, gunakan input teks.";
+      return NextResponse.json({ error: message }, { status: 503 });
+    }
     const fallback = parseOrder(text, catalog);
     return NextResponse.json({ ...fallback, source: "local-parser" });
   }

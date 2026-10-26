@@ -1,0 +1,8 @@
+schema_version: 1
+module_path: database_migrations
+title: Laris PostgreSQL Schema & Migration Scripts
+scope:
+    - supabase/
+source_files: []
+depends_on: []
+related_to: []

@@ -1,0 +1,1 @@
+Requires env vars `NEXT_PUBLIC_SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY` / `NEXT_PUBLIC_SUPABASE_ANON_KEY`, `SUPABASE_SERVICE_ROLE_KEY`, `LARIS_DEMO_EMAIL`, `LARIS_DEMO_PASSWORD` (≥ 8 chars). Run seed first (`npm run db:seed [-- YYYY-MM-DD]`), then RLS tests (`npm run test:rls`). Voice benchmark runs via `npm run eval:voice` against `evals/voice.jsonl`.

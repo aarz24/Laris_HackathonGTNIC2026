@@ -11,7 +11,17 @@
 - [repo.ts](file://src/lib/repo.ts)
 - [route.ts](file://src/app/auth/callback/route.ts)
 - [middleware.ts](file://src/middleware.ts)
+- [actions.ts](file://src/app/actions.ts)
 </cite>
+
+## Update Summary
+**Changes Made**
+- Enhanced workspace management system with complete business lifecycle
+- Added comprehensive team member management with role-based access control
+- Implemented strict tenant isolation through PostgreSQL triggers
+- Updated RLS policies to support four distinct roles (owner, manager, kasir, dapur)
+- Added production hardening with immutable business_id and catalog-write locks
+- Integrated workspace collaboration features including invitation workflows
 
 ## Table of Contents
 1. [Introduction](#introduction)
@@ -26,13 +36,13 @@
 10. [Appendices](#appendices)
 
 ## Introduction
-This document explains how Laris implements multi-tenancy using PostgreSQL Row-Level Security (RLS). The system isolates tenant data by requiring every business-scoped table to carry a `business_id` column and enforcing RLS policies that filter queries based on the authenticated user’s workspace membership. Business isolation is enforced at three layers:
+This document explains how Laris implements a complete multi-tenant architecture using PostgreSQL Row-Level Security (RLS). The system provides business workspaces with team member management, role-based access control (owner, manager, kasir, dapur), and strict tenant isolation through PostgreSQL triggers. Business isolation is enforced at three layers:
 
-- Schema design: all tenant tables include `business_id`, with foreign keys and constraints ensuring referential integrity within a single business.
-- Database security: RLS policies and `SECURITY DEFINER` functions enforce read/write permissions and prevent direct client writes to ledger tables.
-- Application layer: server-side code resolves the current user’s membership, selects a business context, and passes it explicitly to database operations.
+- **Schema design**: all tenant tables include `business_id`, with foreign keys and constraints ensuring referential integrity within a single business.
+- **Database security**: RLS policies and `SECURITY DEFINER` functions enforce read/write permissions and prevent direct client writes to ledger tables.
+- **Application layer**: server-side code resolves the current user's membership, selects a business context, and passes it explicitly to database operations.
 
-The goal is complete tenant separation: a user from one business cannot read or write another business’s rows, even if they attempt to manipulate IDs or request parameters.
+The goal is complete tenant separation: a user from one business cannot read or write another business's rows, even if they attempt to manipulate IDs or request parameters.
 
 ## Project Structure
 The multi-tenancy implementation is primarily defined in Supabase migrations and validated by an integration test. The Next.js application uses Supabase clients to perform authenticated queries and RPC calls.
@@ -43,6 +53,7 @@ subgraph "Next.js App"
 MW["middleware.ts"]
 CB["auth/callback/route.ts"]
 REPO["lib/repo.ts"]
+ACTIONS["app/actions.ts"]
 end
 subgraph "Supabase Database"
 SCHEMA["0001_schema.sql<br/>Tables + triggers"]
@@ -59,6 +70,7 @@ REPO --> POLICIES
 REPO --> FUNCTIONS
 REPO --> WORKSPACES
 REPO --> HARDENING
+ACTIONS --> WORKSPACES
 TEST --> POLICIES
 TEST --> FUNCTIONS
 ```
@@ -67,7 +79,8 @@ TEST --> FUNCTIONS
 - [middleware.ts:1-12](file://src/middleware.ts#L1-L12)
 - [route.ts:1-18](file://src/app/auth/callback/route.ts#L1-L18)
 - [repo.ts:82-193](file://src/lib/repo.ts#L82-L193)
-- [0001_schema.sql:24-284](file://supabase/migrations/0001_schema.sql#L24-L284)
+- [actions.ts:281-289](file://src/app/actions.ts#L281-L289)
+- [0001_schema.sql:24-294](file://supabase/migrations/0001_schema.sql#L24-L294)
 - [0002_rls.sql:10-131](file://supabase/migrations/0002_rls.sql#L10-L131)
 - [0003_functions.sql:70-320](file://supabase/migrations/0003_functions.sql#L70-L320)
 - [0004_workspaces.sql:58-346](file://supabase/migrations/0004_workspaces.sql#L58-L346)
@@ -78,7 +91,8 @@ TEST --> FUNCTIONS
 - [middleware.ts:1-12](file://src/middleware.ts#L1-L12)
 - [route.ts:1-18](file://src/app/auth/callback/route.ts#L1-L18)
 - [repo.ts:82-193](file://src/lib/repo.ts#L82-L193)
-- [0001_schema.sql:24-284](file://supabase/migrations/0001_schema.sql#L24-L284)
+- [actions.ts:281-289](file://src/app/actions.ts#L281-L289)
+- [0001_schema.sql:24-294](file://supabase/migrations/0001_schema.sql#L24-L294)
 - [0002_rls.sql:10-131](file://supabase/migrations/0002_rls.sql#L10-L131)
 - [0003_functions.sql:70-320](file://supabase/migrations/0003_functions.sql#L70-L320)
 - [0004_workspaces.sql:58-346](file://supabase/migrations/0004_workspaces.sql#L58-L346)
@@ -86,12 +100,12 @@ TEST --> FUNCTIONS
 - [rls.test.ts:1-89](file://scripts/rls.test.ts#L1-L89)
 
 ## Core Components
-- Tenant identity model: `business` represents a tenant; `membership` links users to businesses with roles.
-- RLS helper: `private.is_member(business_id, roles?)` checks whether the authenticated user belongs to a business and optionally has required roles.
-- Policy matrix: per-table policies define allowed operations for `authenticated` users based on membership and role.
-- Transactional RPCs: `create_business`, `complete_sale`, `record_purchase`, `create_workspace`, `save_product`, `save_inventory_item`, `add_team_member_by_email`, and `list_team_members`.
-- Production hardening: immutable `business_id`, catalog-write locks, idempotency keys, and numeric validation.
-- Application context resolution: `currentMembership` and `loadSnapshot` resolve the active business and role, then query only within that tenant.
+- **Tenant identity model**: `business` represents a tenant; `membership` links users to businesses with roles.
+- **RLS helper**: `private.is_member(business_id, roles?)` checks whether the authenticated user belongs to a business and optionally has required roles.
+- **Policy matrix**: per-table policies define allowed operations for `authenticated` users based on membership and role.
+- **Transaction RPCs**: `create_business`, `complete_sale`, `record_purchase`, `create_workspace`, `save_product`, `save_inventory_item`, `add_team_member_by_email`, and `list_team_members`.
+- **Production hardening**: immutable `business_id`, catalog-write locks, idempotency keys, and numeric validation.
+- **Application context resolution**: `currentMembership` and `loadSnapshot` resolve the active business and role, then query only within that tenant.
 
 Key responsibilities:
 - **Schema**: defines tenant-scoped tables and audit telemetry.
@@ -100,7 +114,7 @@ Key responsibilities:
 - **Tests**: assert cross-tenant isolation and rejection of direct ledger writes.
 
 **Section sources**
-- [0001_schema.sql:24-284](file://supabase/migrations/0001_schema.sql#L24-L284)
+- [0001_schema.sql:24-294](file://supabase/migrations/0001_schema.sql#L24-L294)
 - [0002_rls.sql:10-131](file://supabase/migrations/0002_rls.sql#L10-L131)
 - [0003_functions.sql:70-320](file://supabase/migrations/0003_functions.sql#L70-L320)
 - [0004_workspaces.sql:58-346](file://supabase/migrations/0004_workspaces.sql#L58-L346)
@@ -249,11 +263,19 @@ Supa-->>Client : Success response
 - [0003_functions.sql:70-320](file://supabase/migrations/0003_functions.sql#L70-L320)
 
 ### Workspace Management System
-Workspace management includes:
-- Creating a workspace with initial inventory and products.
-- Managing team members by email with role assignment.
-- Listing team members for owners/managers.
-- Saving products and inventory items with recipe and supplier relationships.
+The workspace management system provides complete business lifecycle management with team collaboration features:
+
+#### Workspace Creation
+- Creates business, outlet, and initial membership with owner role
+- Seeds inventory items with opening stock and suppliers
+- Creates products with variants and recipe lines
+- Refreshes HPP (Harga Pokok Penjualan) and writes audit logs
+
+#### Team Member Management
+- Owner-only permission to add team members by email
+- Supports roles: manager, kasir, dapur
+- Idempotent membership creation with audit logging
+- Team member listing for owners and managers
 
 ```mermaid
 flowchart TD
@@ -330,7 +352,7 @@ Repo-->>Browser : Snapshot with businessId + role
 
 ### Examples of RLS Policy Syntax and Evaluation
 RLS policies use the `private.is_member` helper to evaluate membership and roles. Example patterns:
-- Select policy for catalog tables: allow any member to read rows where `business_id` matches the user’s membership.
+- Select policy for catalog tables: allow any member to read rows where `business_id` matches the user's membership.
 - Write policy for catalog tables: restrict insert/update/delete to owners and managers.
 - Expense insert policy: require membership and set `created_by` to the current user.
 - Audit select policy: restrict reading audit logs to owners and managers.
@@ -338,7 +360,7 @@ RLS policies use the `private.is_member` helper to evaluate membership and roles
 
 During query execution:
 1. PostgreSQL identifies the table and operation.
-2. The relevant policy’s `using` clause is evaluated with `auth.uid()`.
+2. The relevant policy's `using` clause is evaluated with `auth.uid()`.
 3. If denied, no rows are returned or the write is rejected.
 4. If allowed, the query proceeds with the filtered result set.
 
@@ -378,7 +400,7 @@ When adding a new table to the multi-tenant architecture:
 8. Update tests to assert isolation for the new table.
 
 **Section sources**
-- [0001_schema.sql:24-284](file://supabase/migrations/0001_schema.sql#L24-L284)
+- [0001_schema.sql:24-294](file://supabase/migrations/0001_schema.sql#L24-L294)
 - [0002_rls.sql:28-41](file://supabase/migrations/0002_rls.sql#L28-L41)
 - [0002_rls.sql:46-131](file://supabase/migrations/0002_rls.sql#L46-L131)
 - [0004_workspaces.sql:14-56](file://supabase/migrations/0004_workspaces.sql#L14-L56)
@@ -394,6 +416,7 @@ Repo["lib/repo.ts"] --> Policies["0002_rls.sql"]
 Repo --> Functions["0003_functions.sql"]
 Repo --> Workspaces["0004_workspaces.sql"]
 Repo --> Hardening["0005_production_hardening.sql"]
+Actions["app/actions.ts"] --> Workspaces
 Test["scripts/rls.test.ts"] --> Policies
 Test --> Functions
 Middleware["src/middleware.ts"] --> Repo
@@ -402,6 +425,7 @@ Callback["src/app/auth/callback/route.ts"] --> Repo
 
 **Diagram sources**
 - [repo.ts:82-193](file://src/lib/repo.ts#L82-L193)
+- [actions.ts:281-289](file://src/app/actions.ts#L281-L289)
 - [0002_rls.sql:10-131](file://supabase/migrations/0002_rls.sql#L10-L131)
 - [0003_functions.sql:70-320](file://supabase/migrations/0003_functions.sql#L70-L320)
 - [0004_workspaces.sql:58-346](file://supabase/migrations/0004_workspaces.sql#L58-L346)
@@ -412,6 +436,7 @@ Callback["src/app/auth/callback/route.ts"] --> Repo
 
 **Section sources**
 - [repo.ts:82-193](file://src/lib/repo.ts#L82-L193)
+- [actions.ts:281-289](file://src/app/actions.ts#L281-L289)
 - [0002_rls.sql:10-131](file://supabase/migrations/0002_rls.sql#L10-L131)
 - [0003_functions.sql:70-320](file://supabase/migrations/0003_functions.sql#L70-L320)
 - [0004_workspaces.sql:58-346](file://supabase/migrations/0004_workspaces.sql#L58-L346)
@@ -426,8 +451,6 @@ Callback["src/app/auth/callback/route.ts"] --> Repo
 - Use pagination for large datasets (the repository already paginates reads).
 - Minimize RPC complexity and avoid excessive nested loops; leverage set-based SQL where possible.
 - Catalog-write locks protect consistency but can serialize writes; batch catalog updates carefully.
-
-[No sources needed since this section provides general guidance]
 
 ## Troubleshooting Guide
 Symptoms and remedies:
@@ -449,17 +472,17 @@ Useful checks:
 - [0005_production_hardening.sql:34-68](file://supabase/migrations/0005_production_hardening.sql#L34-L68)
 
 ## Conclusion
-Laris achieves robust multi-tenancy by combining schema design, RLS policies, and transactional RPCs. Every tenant-scoped table carries `business_id`, RLS policies filter queries based on the authenticated user’s workspace membership, and sensitive ledger mutations are executed through secure functions that re-validate permissions and maintain atomicity. The application layer reinforces isolation by resolving membership and scoping all queries to the selected business. Together, these mechanisms provide strong tenant boundaries, clear role-based access control, and reliable auditing.
-
-[No sources needed since this section summarizes without analyzing specific files]
+Laris achieves robust multi-tenancy by combining schema design, RLS policies, and transactional RPCs. Every tenant-scoped table carries `business_id`, RLS policies filter queries based on the authenticated user's workspace membership, and sensitive ledger mutations are executed through secure functions that re-validate permissions and maintain atomicity. The application layer reinforces isolation by resolving membership and scoping all queries to the selected business. Together, these mechanisms provide strong tenant boundaries, clear role-based access control, and reliable auditing.
 
 ## Appendices
 
 ### Role-Based Access Control Matrix
-- Owner: full control over business configuration, team management, and catalog writes.
-- Manager: catalog writes and expense modifications; limited team visibility.
-- Kasir: POS operations, customer creation/updates, expense insertion.
-- Dapur: kitchen-focused roles as defined by membership; typically read-only or limited write scope depending on policy.
+The system implements a comprehensive role-based access control matrix with four distinct roles:
+
+- **Owner**: Full control over business configuration, team management, catalog writes, and all operational aspects.
+- **Manager**: Catalog writes and expense modifications; limited team visibility and reporting capabilities.
+- **Kasir**: POS operations, customer creation/updates, expense insertion, and sales processing.
+- **Dapur**: Kitchen-focused roles with typically read-only or limited write scope depending on specific policy configurations.
 
 Access rules:
 - Catalog reads: any member.
@@ -468,8 +491,49 @@ Access rules:
 - Expense insert: owner, manager, or kasir; modify/delete restricted to owner or manager.
 - Audit and AI telemetry select: owner or manager.
 - Ledger writes: only through RPCs with explicit role checks.
+- Team management: owner-only for adding members.
 
 **Section sources**
 - [0002_rls.sql:46-131](file://supabase/migrations/0002_rls.sql#L46-L131)
 - [0003_functions.sql:90-230](file://supabase/migrations/0003_functions.sql#L90-L230)
 - [0004_workspaces.sql:302-333](file://supabase/migrations/0004_workspaces.sql#L302-L333)
+
+### Workspace Collaboration Features
+The workspace system provides collaborative features for business teams:
+
+#### Team Invitation Workflow
+- Owners can invite team members by email address
+- Supports role assignment during invitation (manager, kasir, dapur)
+- Idempotent operations prevent duplicate invitations
+- Audit logging tracks all membership changes
+
+#### Team Member Management
+- Owners and managers can list team members
+- Real-time team status reflected in application snapshots
+- Role-based visibility controls for team information
+- Integration with user authentication system
+
+**Section sources**
+- [0004_workspaces.sql:58-70](file://supabase/migrations/0004_workspaces.sql#L58-L70)
+- [0004_workspaces.sql:302-333](file://supabase/migrations/0004_workspaces.sql#L302-L333)
+- [repo.ts:144-158](file://src/lib/repo.ts#L144-L158)
+
+### Production Hardening Features
+The production hardening layer provides additional security and reliability:
+
+#### Tenant Isolation Enforcement
+- Immutable `business_id` prevents tenant migration attacks
+- Per-business locking for catalog operations
+- Trigger-based validation for cross-tenant references
+- Numeric validation rejecting non-finite values
+
+#### Operational Reliability
+- Idempotency keys for transactions and purchases
+- Comprehensive audit logging for all critical operations
+- Robust error handling with specific error codes
+- Catalog version consistency during concurrent operations
+
+**Section sources**
+- [0005_production_hardening.sql:34-68](file://supabase/migrations/0005_production_hardening.sql#L34-L68)
+- [0005_production_hardening.sql:11-33](file://supabase/migrations/0005_production_hardening.sql#L11-L33)
+- [0004_workspaces.sql:14-56](file://supabase/migrations/0004_workspaces.sql#L14-L56)

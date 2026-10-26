@@ -35,6 +35,8 @@ export interface CartItem {
   productId: string;
   quantity: number;
   note?: string;
+  /** Menu name captured at sale time (cloud order_item.name); keeps history readable after a menu is deleted. */
+  name?: string;
 }
 
 export interface Sale {
@@ -101,7 +103,7 @@ export interface BusinessState {
   expenses: Expense[];
   customers: Customer[];
   purchases: Purchase[];
-  business: { name: string; owner: string; outlet: string; kind?: string };
+  business: { name: string; owner: string; outlet: string; kind?: string; taxRate?: number; receiptFooter?: string };
   dayTarget: number;
   products?: Product[];
   inventory?: InventoryItem[];
@@ -175,7 +177,7 @@ export function getStock(state: BusinessState, itemId: string): number {
     movement.itemId === itemId ? stock + movement.quantity : stock, item.openingStock);
 }
 
-export function getCartTotal(items: CartItem[], discount = 0, taxEnabled = false, catalog: Product[] = products): {
+export function getCartTotal(items: CartItem[], discount = 0, taxEnabled = false, catalog: Product[] = products, taxRate = 10): {
   subtotal: number; discount: number; tax: number; total: number;
 } {
   // An empty cart is useful in the register; completeSale rejects it separately.
@@ -186,8 +188,8 @@ export function getCartTotal(items: CartItem[], discount = 0, taxEnabled = false
   assertAmount(discount, "Diskon");
   if (discount > subtotal) throw new Error("Diskon tidak boleh melebihi subtotal.");
   const roundedDiscount = Math.round(discount);
-  // Demo restaurant tax (PBJT): 10% after discount, rounded to whole rupiah.
-  const tax = taxEnabled ? Math.round((subtotal - roundedDiscount) * 0.1) : 0;
+  // Business tax (e.g. PBJT 10% or PPN 11%): configured rate after discount, rounded to whole rupiah.
+  const tax = taxEnabled ? Math.round((subtotal - roundedDiscount) * taxRate / 100) : 0;
   const total = subtotal - roundedDiscount + tax;
   assertAmount(total, "Total");
   return { subtotal, discount: roundedDiscount, tax, total };
@@ -239,7 +241,7 @@ export function completeSale(state: BusinessState, input: {
 
   const catalog = state.products ?? products;
   validateCart(input.items, catalog);
-  const totals = getCartTotal(input.items, input.discount, input.taxEnabled, catalog);
+  const totals = getCartTotal(input.items, input.discount, input.taxEnabled, catalog, state.business.taxRate ?? 10);
   if (!["Tunai", "QRIS", "Transfer"].includes(input.payment)) throw new Error("Metode pembayaran tidak valid.");
   const channel = input.channel ?? "Kasir";
   if (channel !== "Kasir" && channel !== "Etalase") throw new Error("Kanal penjualan tidak valid.");
@@ -333,6 +335,45 @@ export function recordPurchase(state: BusinessState, input: { itemId: string; qu
   };
 }
 
+/** Correction paths for demo mode — mirror the cloud delete_* and update_customer RPCs. */
+export function deleteProduct(state: BusinessState, productId: string): BusinessState {
+  const catalog = state.products ?? products;
+  if (!catalog.some((product) => product.id === productId)) throw new Error("Menu tidak ditemukan.");
+  return { ...state, products: catalog.filter((product) => product.id !== productId) };
+}
+
+export function deleteInventoryItem(state: BusinessState, itemId: string): BusinessState {
+  const items = state.inventory ?? inventory;
+  if (!items.some((item) => item.id === itemId)) throw new Error("Bahan tidak ditemukan.");
+  const dependent = (state.products ?? products).find((product) => product.recipe.some((line) => line.itemId === itemId));
+  if (dependent) throw new Error(`Bahan masih dipakai resep ${dependent.name}. Hapus atau ubah resep menu tersebut terlebih dahulu.`);
+  return { ...state, inventory: items.filter((item) => item.id !== itemId) };
+}
+
+export function deleteCustomer(state: BusinessState, customerId: string): BusinessState {
+  if (!state.customers.some((customer) => customer.id === customerId)) throw new Error("Pelanggan tidak ditemukan.");
+  return { ...state, customers: state.customers.filter((customer) => customer.id !== customerId) };
+}
+
+export function deleteExpense(state: BusinessState, expenseId: string): BusinessState {
+  if (!state.expenses.some((expense) => expense.id === expenseId)) throw new Error("Pengeluaran tidak ditemukan.");
+  return { ...state, expenses: state.expenses.filter((expense) => expense.id !== expenseId) };
+}
+
+export function updateCustomer(state: BusinessState, input: { customerId: string; name: string; phone: string }): BusinessState {
+  const name = input.name.trim();
+  if (!name) throw new Error("Isi nama pelanggan.");
+  const phone = input.phone.trim();
+  if (!/^\+?\d{8,15}$/.test(phone)) throw new Error("Nomor telepon harus terdiri dari 8–15 digit, boleh diawali +.");
+  const target = state.customers.find((customer) => customer.id === input.customerId);
+  if (!target) throw new Error("Pelanggan tidak ditemukan.");
+  const normalized = phone.replace(/^\+/, "");
+  if (state.customers.some((customer) => customer.id !== target.id && customer.phone.replace(/^\+/, "") === normalized)) {
+    throw new Error("Nomor telepon ini sudah terdaftar untuk pelanggan lain.");
+  }
+  return { ...state, customers: state.customers.map((customer) => customer.id === target.id ? { ...customer, name, phone } : customer) };
+}
+
 /** Deterministic 90-day "Kopi Senja" history ending on `endDate` (the seed script anchors it to the real date). */
 export function createInitialState(endDate: string = DEMO_DATE): BusinessState {
   if (!/^\d{4}-\d{2}-\d{2}$/.test(endDate) || Number.isNaN(Date.parse(`${endDate}T00:00:00Z`))) throw new Error("Tanggal akhir tidak valid.");
@@ -397,7 +438,7 @@ export function createInitialState(endDate: string = DEMO_DATE): BusinessState {
     version: 1, sales, expenses, customers, purchases: [],
     // openingStock is the demo's remaining stock, not stock before historical sales.
     // Only new demo mutations append movements; history is deliberately not deducted.
-    stockMovements: [], business: { name: "Kopi Senja", owner: "Raka", outlet: "Bandung, Dago" }, dayTarget: 3500000,
+    stockMovements: [], business: { name: "Kopi Senja", owner: "Raka", outlet: "Bandung, Dago", taxRate: 10, receiptFooter: "Terima kasih sudah jadi bagian cerita kami.\nSampai jumpa di cangkir berikutnya." }, dayTarget: 3500000,
     products: products.map((product) => ({ ...product, recipe: product.recipe.map((line) => ({ ...line })) })),
     inventory: inventory.map((item) => ({ ...item })),
   };

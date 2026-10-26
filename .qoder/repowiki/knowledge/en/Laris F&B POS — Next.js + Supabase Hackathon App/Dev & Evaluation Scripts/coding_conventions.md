@@ -1,0 +1,5 @@
+- Environment variables are accessed through the shared `requireEnv` helper rather than direct `process.env` reads, so missing values surface as descriptive errors.
+- Supabase access is split into two client factories — `adminClient` for schema/data ops that bypass RLS and `userClient` for any operation that must exercise Row-Level Security.
+- Bulk inserts are batched via the local `insertChunks` helper using fixed-size slices (500–1000 rows) to stay within Supabase payload limits.
+- Idempotent setup functions (`resetBusiness`, `ensureUser`) delete or update existing records before inserting, making repeated script runs safe.
+- CSS transforms use sentinel markers (`/* laris-polish */`, `/*__ROOT__*/`) to detect whether their injected block already exists, allowing reruns to replace rather than duplicate content.

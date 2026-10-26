@@ -19,15 +19,15 @@ const paymentLabel = { tunai: "Tunai", qris: "QRIS", transfer: "Transfer" } as c
 
 type OrderRow = {
   id: string; created_at: string; customer_name: string; channel: string; subtotal: number; discount: number; tax: number; total: number; cash_received: number;
-  order_item: { product_code: string; quantity: number; note: string | null }[];
+  order_item: { product_code: string; name: string | null; quantity: number; note: string | null }[];
   payment: { method: keyof typeof paymentLabel }[];
 };
-export const ORDER_SELECT = "id, created_at, customer_name, channel, subtotal, discount, tax, total, cash_received, order_item(product_code, quantity, note), payment(method)";
+export const ORDER_SELECT = "id, created_at, customer_name, channel, subtotal, discount, tax, total, cash_received, order_item(product_code, name, quantity, note), payment(method)";
 
 export function mapSale(row: OrderRow): Sale {
   return {
     id: row.id,
-    items: row.order_item.map((item) => ({ productId: item.product_code, quantity: item.quantity, ...(item.note ? { note: item.note } : {}) })),
+    items: row.order_item.map((item) => ({ productId: item.product_code, quantity: item.quantity, ...(item.note ? { note: item.note } : {}), ...(item.name ? { name: item.name } : {}) })),
     subtotal: Number(row.subtotal), discount: Number(row.discount), tax: Number(row.tax), total: Number(row.total), cashReceived: Number(row.cash_received),
     payment: paymentLabel[row.payment[0]?.method ?? "tunai"] ?? "Tunai",
     customerName: row.customer_name,
@@ -82,8 +82,8 @@ type RecipeRow = { variant_id: string; qty_base_unit: number | string; inventory
 export async function loadCatalog(supabase: SupabaseClient, businessId: string): Promise<{ products: Product[]; inventory: InventoryItem[] }> {
   const [itemRows, productRows, variantRows, recipeRows] = await Promise.all([
     fetchAll<InventoryRow>((from, to) => supabase.from("inventory_item").select("code, name, base_unit, avg_cost_per_unit, reorder_point, supplier(name)").eq("business_id", businessId).is("deleted_at", null).order("code").range(from, to).returns<InventoryRow[]>()),
-    fetchAll<ProductRow>((from, to) => supabase.from("product").select("id, code, name, category, image_url, is_active, deleted_at").eq("business_id", businessId).order("name").range(from, to).returns<ProductRow[]>()),
-    fetchAll<VariantRow>((from, to) => supabase.from("product_variant").select("id, product_id, price, hpp_cached, is_default, is_available, deleted_at").eq("business_id", businessId).eq("is_default", true).range(from, to).returns<VariantRow[]>()),
+    fetchAll<ProductRow>((from, to) => supabase.from("product").select("id, code, name, category, image_url, is_active, deleted_at").eq("business_id", businessId).is("deleted_at", null).order("name").range(from, to).returns<ProductRow[]>()),
+    fetchAll<VariantRow>((from, to) => supabase.from("product_variant").select("id, product_id, price, hpp_cached, is_default, is_available, deleted_at").eq("business_id", businessId).eq("is_default", true).is("deleted_at", null).range(from, to).returns<VariantRow[]>()),
     fetchAll<RecipeRow>((from, to) => supabase.from("recipe_line").select("variant_id, qty_base_unit, inventory_item(code)").eq("business_id", businessId).range(from, to).returns<RecipeRow[]>()),
   ]);
 
@@ -139,7 +139,7 @@ export async function loadSnapshot(supabase: SupabaseClient): Promise<Snapshot |
     fetchAll<OrderRow>((from, to) => supabase.from("sales_order").select(ORDER_SELECT).eq("business_id", id).eq("status", "paid").order("created_at").order("id").range(from, to).returns<OrderRow[]>()),
     fetchAll<MovementRow>((from, to) => supabase.from("stock_movement").select(MOVEMENT_SELECT).eq("business_id", id).order("created_at").order("id").range(from, to).returns<MovementRow[]>()),
     fetchAll<CustomerRow>((from, to) => supabase.from("customer").select(CUSTOMER_SELECT).eq("business_id", id).is("deleted_at", null).order("created_at").order("id").range(from, to).returns<CustomerRow[]>()),
-    fetchAll<ExpenseRow>((from, to) => supabase.from("expense").select(EXPENSE_SELECT).eq("business_id", id).order("spent_at").order("id").range(from, to).returns<ExpenseRow[]>()),
+    fetchAll<ExpenseRow>((from, to) => supabase.from("expense").select(EXPENSE_SELECT).eq("business_id", id).is("deleted_at", null).order("spent_at").order("id").range(from, to).returns<ExpenseRow[]>()),
     fetchAll<PurchaseRow>((from, to) => supabase.from("purchase_line").select(PURCHASE_SELECT).eq("business_id", id).order("id").range(from, to).returns<PurchaseRow[]>()),
     canReadTeam ? supabase.rpc("list_team_members", { p_business_id: id }).returns<TeamRow[]>() : Promise.resolve({ data: null, error: null }),
   ]);
@@ -167,7 +167,7 @@ export async function loadSnapshot(supabase: SupabaseClient): Promise<Snapshot |
     }));
   }
 
-  const settings = business.data.settings as { kind?: unknown } | null;
+  const settings = business.data.settings as { kind?: unknown; taxRate?: unknown; receiptFooter?: unknown } | null;
   return {
     businessId: id,
     role: membership.role,
@@ -177,6 +177,8 @@ export async function loadSnapshot(supabase: SupabaseClient): Promise<Snapshot |
       business: {
         name: business.data.name, owner: business.data.owner_name || "Pemilik", outlet: outlet.data?.name ?? "Outlet utama",
         ...(typeof settings?.kind === "string" ? { kind: settings.kind } : {}),
+        taxRate: typeof settings?.taxRate === "number" ? settings.taxRate : 10,
+        receiptFooter: typeof settings?.receiptFooter === "string" ? settings.receiptFooter : "Terima kasih sudah berkunjung.",
       },
       dayTarget: Number(business.data.day_target),
       sales: mappedSales,

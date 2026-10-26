@@ -3,34 +3,42 @@ schema_version: 1
 locale: en-US
 branch: master
 nodes_managed: true
-exported_at: "2026-10-23T21:01:36Z"
+exported_at: "2026-10-23T21:38:08Z"
 modules:
     "":
-        dir_name: Laris — GTNIC Hackathon POS & Inventory Platform
-        title: Laris — GTNIC Hackathon POS & Inventory Platform
+        dir_name: Laris F&B POS — Next.js + Supabase Hackathon App
+        title: Laris F&B POS — Next.js + Supabase Hackathon App
         scope:
             - README.md
-            - PRD_Laris_GTNIC2026.md
-            - implementation_plan.md
             - .gitignore
-            - package.json
-            - package-lock.json
-            - next.config.ts
-            - tsconfig.json
             - eslint.config.mjs
+            - next.config.ts
+            - package.json
             - postcss.config.mjs
-            - .env.example
-            - Panduan PRD dan Rangkuman Lengkap Technical Meeting Web Development GTNC 2026.pdf
+            - tsconfig.json
+            - implementation_plan.md
+            - PRD_Laris_GTNIC2026.md
         source_files: []
         children:
-            - scripts
+            - database_migrations
+            - dev_scripts
         depends_on: []
         related_to: []
-    scripts:
-        dir_name: Dev & Ops Scripts (Seeding, RLS Tests, UI Polish, Voice Benchmark)
-        title: Dev & Ops Scripts (Seeding, RLS Tests, UI Polish, Voice Benchmark)
+    database_migrations:
+        dir_name: Laris PostgreSQL Schema & Migration Scripts
+        title: Laris PostgreSQL Schema & Migration Scripts
+        scope:
+            - supabase/
+        source_files: []
+        children: []
+        depends_on: []
+        related_to: []
+    dev_scripts:
+        dir_name: Dev & Evaluation Scripts
+        title: Dev & Evaluation Scripts
         scope:
             - scripts/
+            - evals/
         source_files: []
         children: []
         depends_on: []

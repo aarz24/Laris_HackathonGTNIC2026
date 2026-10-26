@@ -7,6 +7,7 @@ import type { BusinessState, CartItem, Sale } from "./laris-data";
 const {
   DEMO_DATE, products, inventory, createInitialState, currency, getStock,
   getCartTotal, completeSale, recordPurchase, parseOrder, exportSalesCsv, timestamp,
+  deleteProduct, deleteInventoryItem, deleteCustomer, deleteExpense, updateCustomer,
 }: typeof import("./laris-data") = await import(new URL("./laris-data.ts", import.meta.url).href);
 
 const seed = createInitialState();
@@ -101,7 +102,10 @@ test("seed is deterministic, fresh, serializable, and covers 90 days ending on d
   assert.equal(dates.get(DEMO_DATE), 86);
   for (const [date, count] of dates) if (date !== DEMO_DATE) assert.ok(count >= 15 && count <= 30);
   assert.equal(new Set(seed.sales.map((sale) => sale.id)).size, seed.sales.length);
-  assert.deepEqual(seed.business, { name: "Kopi Senja", owner: "Raka", outlet: "Bandung, Dago" });
+  assert.deepEqual(seed.business, {
+    name: "Kopi Senja", owner: "Raka", outlet: "Bandung, Dago", taxRate: 10,
+    receiptFooter: "Terima kasih sudah jadi bagian cerita kami.\nSampai jumpa di cangkir berikutnya.",
+  });
   assert.equal(seed.dayTarget, 3500000);
   assert.equal(seed.version, 1);
   assert.ok(seed.expenses.length >= 90);
@@ -515,4 +519,145 @@ test("full seeded CSV exports one escaped row per sale and remains read-only", (
   assert.equal(rows.length, seed.sales.length + 1);
   assert.ok(rows.every((row) => row.length === 12));
   assert.equal(JSON.stringify(seed), before);
+});
+
+// ---------------------------------------------------------------------------
+// Correction helpers: soft deletes and edits (migration 0007)
+// ---------------------------------------------------------------------------
+
+test("deleteProduct removes the product and returns a new state", () => {
+  const state = emptyState();
+  state.products = [...products];
+  const after = deleteProduct(state, "kopi-susu");
+  assert.equal(after.products!.length, products.length - 1);
+  assert.ok(!after.products!.some((p) => p.id === "kopi-susu"));
+  // Original state unchanged (immutability).
+  assert.equal(state.products.length, products.length);
+});
+
+test("deleteProduct throws for a missing product", () => {
+  assert.throws(() => deleteProduct(emptyState(), "nonexistent"), /Menu tidak ditemukan/);
+});
+
+test("deleteInventoryItem removes the item and returns a new state", () => {
+  const state = emptyState();
+  // Use tea since nothing in the default catalog depends solely on it for the first recipe line.
+  state.inventory = [...inventory];
+  state.products = products.filter((p) => !p.recipe.some((r) => r.itemId === "tea"));
+  const before = state.inventory.length;
+  const after = deleteInventoryItem(state, "tea");
+  assert.equal(after.inventory!.length, before - 1);
+  assert.ok(!after.inventory!.some((i) => i.id === "tea"));
+});
+
+test("deleteInventoryItem throws when a product depends on it", () => {
+  const state = emptyState();
+  state.products = [...products];
+  state.inventory = [...inventory];
+  // beans is used by kopi-susu, americano, cappuccino
+  assert.throws(() => deleteInventoryItem(state, "beans"), /masih dipakai resep/);
+});
+
+test("deleteInventoryItem throws for a missing item", () => {
+  assert.throws(() => deleteInventoryItem(emptyState(), "nonexistent"), /Bahan tidak ditemukan/);
+});
+
+test("deleteCustomer removes by id", () => {
+  const state = emptyState();
+  state.customers = [
+    { id: "c1", name: "A", phone: "081200000001", visits: 1, totalSpent: 10000, lastVisit: "", segment: "Potensial", points: 10 },
+    { id: "c2", name: "B", phone: "081200000002", visits: 2, totalSpent: 20000, lastVisit: "", segment: "Setia", points: 20 },
+  ];
+  const after = deleteCustomer(state, "c1");
+  assert.equal(after.customers.length, 1);
+  assert.equal(after.customers[0].id, "c2");
+  // Original unchanged.
+  assert.equal(state.customers.length, 2);
+});
+
+test("deleteCustomer throws for a missing customer", () => {
+  assert.throws(() => deleteCustomer(emptyState(), "nonexistent"), /Pelanggan tidak ditemukan/);
+});
+
+test("deleteExpense removes by id", () => {
+  const state = emptyState();
+  state.expenses = [
+    { id: "e1", description: "Bahan", category: "Bahan baku", amount: 100000, createdAt: "2026-10-18T07:00:00+07:00" },
+    { id: "e2", description: "Sewa", category: "Sewa", amount: 3500000, createdAt: "2026-10-18T07:00:00+07:00" },
+  ];
+  const after = deleteExpense(state, "e1");
+  assert.equal(after.expenses.length, 1);
+  assert.equal(after.expenses[0].id, "e2");
+});
+
+test("deleteExpense throws for a missing expense", () => {
+  assert.throws(() => deleteExpense(emptyState(), "nonexistent"), /Pengeluaran tidak ditemukan/);
+});
+
+test("updateCustomer edits name and phone immutably", () => {
+  const state = emptyState();
+  state.customers = [
+    { id: "c1", name: "Old Name", phone: "081200000001", visits: 5, totalSpent: 50000, lastVisit: "", segment: "Setia", points: 50 },
+    { id: "c2", name: "Other", phone: "081200000009", visits: 1, totalSpent: 10000, lastVisit: "", segment: "Potensial", points: 10 },
+  ];
+  const after = updateCustomer(state, { customerId: "c1", name: "  New Name  ", phone: "081299990001" });
+  assert.equal(after.customers[0].name, "New Name");
+  assert.equal(after.customers[0].phone, "081299990001");
+  // Other fields preserved.
+  assert.equal(after.customers[0].visits, 5);
+  // Second customer unchanged.
+  assert.equal(after.customers[1].name, "Other");
+  // Original state unchanged.
+  assert.equal(state.customers[0].name, "Old Name");
+});
+
+test("updateCustomer rejects empty name", () => {
+  const state = emptyState();
+  state.customers = [{ id: "c1", name: "A", phone: "081200000001", visits: 0, totalSpent: 0, lastVisit: "", segment: "Potensial", points: 0 }];
+  assert.throws(() => updateCustomer(state, { customerId: "c1", name: "  ", phone: "081200000001" }), /Isi nama/);
+});
+
+test("updateCustomer rejects invalid phone", () => {
+  const state = emptyState();
+  state.customers = [{ id: "c1", name: "A", phone: "081200000001", visits: 0, totalSpent: 0, lastVisit: "", segment: "Potensial", points: 0 }];
+  assert.throws(() => updateCustomer(state, { customerId: "c1", name: "A", phone: "123" }), /telepon/);
+});
+
+test("updateCustomer rejects duplicate phone across customers", () => {
+  const state = emptyState();
+  state.customers = [
+    { id: "c1", name: "A", phone: "081200000001", visits: 0, totalSpent: 0, lastVisit: "", segment: "Potensial", points: 0 },
+    { id: "c2", name: "B", phone: "081200000002", visits: 0, totalSpent: 0, lastVisit: "", segment: "Potensial", points: 0 },
+  ];
+  assert.throws(() => updateCustomer(state, { customerId: "c1", name: "A", phone: "081200000002" }), /sudah terdaftar/);
+});
+
+test("updateCustomer throws for a missing customer", () => {
+  assert.throws(() => updateCustomer(emptyState(), { customerId: "nope", name: "X", phone: "081200000001" }), /Pelanggan tidak ditemukan/);
+});
+
+// ---------------------------------------------------------------------------
+// Configurable tax rate (migration 0008)
+// ---------------------------------------------------------------------------
+
+test("getCartTotal applies a custom tax rate", () => {
+  // 11% PPN instead of default 10% PBJT
+  const result = getCartTotal(oneCoffee, 0, true, products, 11);
+  assert.equal(result.subtotal, 25000);
+  assert.equal(result.tax, Math.round(25000 * 11 / 100));
+  assert.equal(result.total, 25000 + result.tax);
+});
+
+test("getCartTotal with zero tax rate effectively disables tax", () => {
+  const result = getCartTotal(oneCoffee, 0, true, products, 0);
+  assert.equal(result.tax, 0);
+  assert.equal(result.total, 25000);
+});
+
+test("completeSale uses the business taxRate from state", () => {
+  const state = emptyState();
+  state.business.taxRate = 15;
+  const { sale } = completeSale(state, { items: oneCoffee, payment: "Tunai", cashReceived: 50000, taxEnabled: true });
+  assert.equal(sale.tax, Math.round(25000 * 15 / 100));
+  assert.equal(sale.total, 25000 + sale.tax);
 });

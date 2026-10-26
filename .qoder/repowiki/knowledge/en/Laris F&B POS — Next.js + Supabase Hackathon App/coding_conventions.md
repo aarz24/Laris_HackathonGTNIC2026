@@ -1,0 +1,3 @@
+- Server-side Supabase access goes through `@supabase/ssr` with service-role keys kept out of the browser, while client-side code uses the anon key.
+- All business logic mutations are exposed as Next.js server actions validated with Zod schemas rather than raw API routes.
+- Database money fields use Postgres `bigint` (cents) and quantities use `numeric(14,3)` across every migration table.

@@ -1,1 +1,0 @@
-Next.js 15 + Supabase workspace that wires a voice-to-cart Indonesian POS, recipe/stock ledger, checkout, and AI assistant into tenant-isolated business accounts.

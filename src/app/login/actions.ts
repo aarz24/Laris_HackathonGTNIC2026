@@ -3,7 +3,7 @@
 import { redirect } from "next/navigation";
 import { z } from "zod";
 import { appOrigin } from "@/lib/app-url";
-import { isCloudConfigured, serverEnv } from "@/lib/env";
+import { isCloudConfigured, isDemoLoginEnabled, serverEnv } from "@/lib/env";
 import { createClient } from "@/lib/supabase/server";
 
 export type LoginState = { error?: string; email?: string; notice?: string };
@@ -66,8 +66,9 @@ export async function signUpAction(_prev: LoginState, form: FormData): Promise<L
 
 export async function judgeSignInAction(): Promise<LoginState> {
   if (!isCloudConfigured) return { error: "Supabase belum dikonfigurasi." };
+  // Off in production unless LARIS_ALLOW_DEMO_LOGIN=true (e.g. a dedicated judging deployment).
+  if (!isDemoLoginEnabled()) return { error: "Login demo tidak tersedia." };
   const { demoEmail, demoPassword } = serverEnv();
-  if (!demoEmail || !demoPassword) return { error: "Akun demo belum dikonfigurasi." };
   const supabase = await createClient();
   const { error } = await supabase.auth.signInWithPassword({ email: demoEmail, password: demoPassword });
   if (error) return { error: `${authMessage(error.message)} Pastikan data demo sudah di-seed.` };

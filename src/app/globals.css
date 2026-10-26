@@ -972,6 +972,36 @@ h1 {
   transform: translateY(-1px);
 }
 
+.button.destructive {
+  background: var(--red-light);
+  color: var(--red-dark);
+  border: 1px solid var(--red-border);
+}
+
+.button.destructive:hover:not(:disabled) {
+  background: var(--red-border);
+}
+
+.destructive-text {
+  color: var(--red-dark) !important;
+}
+.destructive-text:hover {
+  color: var(--red) !important;
+}
+
+.team-card-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border);
+}
+.team-card-actions select {
+  flex: 1;
+  font-size: 11px;
+  padding: 4px 8px;
+}
+
 .button.secondary {
   background: var(--surface);
   border: 1px solid var(--border);

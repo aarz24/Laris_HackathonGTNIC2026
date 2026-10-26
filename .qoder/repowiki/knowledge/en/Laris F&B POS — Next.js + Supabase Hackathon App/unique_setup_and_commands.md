@@ -1,0 +1,1 @@
+`npm run dev` / `build` / `start` boot the Next app; `npm run db:seed` runs the Supabase demo tenant seed; `npm run test:rls` validates cross-tenant RLS isolation; `npm run eval:voice` evaluates the Indonesian voice-order parser against `evals/voice.jsonl`; `npm run test` runs the existing `node:test` suite.

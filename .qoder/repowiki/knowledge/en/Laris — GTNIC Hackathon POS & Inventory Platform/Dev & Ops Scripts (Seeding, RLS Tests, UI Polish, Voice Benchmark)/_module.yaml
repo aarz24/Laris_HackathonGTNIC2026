@@ -1,8 +1,0 @@
-schema_version: 1
-module_path: scripts
-title: Dev & Ops Scripts (Seeding, RLS Tests, UI Polish, Voice Benchmark)
-scope:
-    - scripts/
-source_files: []
-depends_on: []
-related_to: []

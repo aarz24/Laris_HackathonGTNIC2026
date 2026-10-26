@@ -6,28 +6,51 @@
 - [laris-data.ts](file://src/lib/laris-data.ts)
 - [repo.ts](file://src/lib/repo.ts)
 - [page.tsx](file://src/app/page.tsx)
+- [layout.tsx](file://src/app/layout.tsx)
+- [middleware.ts](file://src/middleware.ts)
+- [auth callback route.ts](file://src/app/auth/callback/route.ts)
+- [supabase middleware.ts](file://src/lib/supabase/middleware.ts)
+- [supabase server.ts](file://src/lib/supabase/server.ts)
+- [login actions.ts](file://src/app/login/actions.ts)
+- [login page.tsx](file://src/app/login/page.tsx)
+- [login form.tsx](file://src/app/login/login-form.tsx)
+- [register page.tsx](file://src/app/register/page.tsx)
+- [register form.tsx](file://src/app/register/register-form.tsx)
+- [forgot-password page.tsx](file://src/app/forgot-password/page.tsx)
+- [reset-password page.tsx](file://src/app/reset-password/page.tsx)
+- [password forms.tsx](file://src/components/password-forms.tsx)
 - [demo page.tsx](file://src/app/demo/page.tsx)
 - [actions.ts](file://src/app/actions.ts)
 - [README.md](file://README.md)
 </cite>
+
+## Update Summary
+**Changes Made**
+- Added complete authentication system documentation including registration, login, password reset, and email confirmation flows
+- Updated architecture overview to include Next.js middleware session management and Supabase auth integration
+- Added new sections covering auth callback handling, demo/judge accounts support, and proper session management
+- Enhanced cloud entry point documentation with authentication requirements and user metadata handling
+- Updated troubleshooting guide with authentication-related issues and error handling patterns
 
 ## Table of Contents
 1. [Introduction](#introduction)
 2. [Project Structure](#project-structure)
 3. [Core Components](#core-components)
 4. [Architecture Overview](#architecture-overview)
-5. [Detailed Component Analysis](#detailed-component-analysis)
-6. [Dependency Analysis](#dependency-analysis)
-7. [Performance Considerations](#performance-considerations)
-8. [Troubleshooting Guide](#troubleshooting-guide)
-9. [Conclusion](#conclusion)
+5. [Authentication System](#authentication-system)
+6. [Detailed Component Analysis](#detailed-component-analysis)
+7. [Dependency Analysis](#dependency-analysis)
+8. [Performance Considerations](#performance-considerations)
+9. [Troubleshooting Guide](#troubleshooting-guide)
+10. [Conclusion](#conclusion)
 
 ## Introduction
 Laris is a workspace-oriented operational application for Indonesian food-and-beverage businesses. Its core architecture separates the client-side user interface from deterministic business logic and server-side data persistence. The central `LarisApp` component acts as the main container that manages views, modals, navigation state, cart state, and either local or cloud-backed business state. Business rules such as cart totals, stock calculations, customer segmentation, purchase cost averaging, and sale completion are implemented as pure functions operating on an immutable domain model. Server-side operations use Supabase RPCs through Next.js actions, while the repository layer maps database rows into the shared `BusinessState` snapshot consumed by the UI.
 
-The application supports two modes:
+The application now supports three modes:
 - **Local mode**: Demo data seeded deterministically, persisted to browser storage, with all business logic running in the browser.
 - **Cloud mode**: A server-fetched snapshot of workspace data drives the same UI, while mutations are executed through authenticated server actions and atomic Supabase procedures.
+- **Authenticated cloud mode**: Full authentication system with registration, login, password reset, email confirmation, and role-based access control.
 
 **Section sources**
 - [README.md:1-57](file://README.md#L1-L57)
@@ -40,12 +63,16 @@ At a high level, the core application consists of:
 - A domain library defining the shared data model and deterministic business functions.
 - A repository layer that loads a typed snapshot from Supabase.
 - App pages that select between demo and cloud entry points.
+- Authentication pages and server actions for user management.
+- Next.js middleware for session management and route protection.
 - Server actions that perform validated, role-checked mutations against Supabase.
 
 ```mermaid
 graph TB
 subgraph "Client"
 DemoPage["Demo Page<br/>src/app/demo/page.tsx"]
+LoginPage["Login Page<br/>src/app/login/page.tsx"]
+RegisterPage["Register Page<br/>src/app/register/page.tsx"]
 HomePage["Cloud Home Page<br/>src/app/page.tsx"]
 LarisApp["LarisApp Container<br/>src/components/laris-app.tsx"]
 Visuals["Visual Components<br/>src/components/laris-visuals.tsx"]
@@ -56,9 +83,16 @@ end
 subgraph "Server Layer"
 Actions["Next.js Actions<br/>src/app/actions.ts"]
 Repo["Repository Snapshot<br/>src/lib/repo.ts"]
+AuthActions["Auth Actions<br/>src/app/login/actions.ts"]
 Supabase["Supabase Database"]
 end
+subgraph "Middleware"
+NextMiddleware["Next.js Middleware<br/>src/middleware.ts"]
+SessionManager["Session Manager<br/>src/lib/supabase/middleware.ts"]
+end
 DemoPage --> LarisApp
+LoginPage --> AuthActions
+RegisterPage --> AuthActions
 HomePage --> Repo
 Repo --> LarisApp
 LarisApp --> Domain
@@ -66,6 +100,8 @@ LarisApp --> Actions
 Actions --> Supabase
 Repo --> Supabase
 LarisApp --> Visuals
+NextMiddleware --> SessionManager
+SessionManager --> HomePage
 ```
 
 **Diagram sources**
@@ -75,6 +111,8 @@ LarisApp --> Visuals
 - [laris-data.ts:3-110](file://src/lib/laris-data.ts#L3-L110)
 - [repo.ts:82-193](file://src/lib/repo.ts#L82-L193)
 - [actions.ts:52-117](file://src/app/actions.ts#L52-L117)
+- [middleware.ts:4-11](file://src/middleware.ts#L4-L11)
+- [supabase middleware.ts:6-39](file://src/lib/supabase/middleware.ts#L6-L39)
 
 **Section sources**
 - [README.md:97-110](file://README.md#L97-L110)
@@ -88,7 +126,7 @@ LarisApp --> Visuals
 - Navigation view state (`overview`, `pos`, `transactions`, `products`, `inventory`, `purchases`, `customers`, `storefront`, `finance`, `team`).
 - Modal state controlling dialogs such as checkout, receipt, product editor, inventory editor, settings, voice assistant, search, and team invitation.
 - Cart state, payment options, discount/tax toggles, customer input, voice parsing state, AI assistant messages, and pending mutation flags.
-- Derived metrics computed with `useMemo`, including today’s sales, revenue, gross profit, growth, low-stock alerts, top products, and chart series.
+- Derived metrics computed with `useMemo`, including today's sales, revenue, gross profit, growth, low-stock alerts, top products, and chart series.
 
 It also coordinates:
 - Local persistence via `localStorage`.
@@ -157,26 +195,38 @@ This design keeps the container reusable while isolating environment-specific se
 - [demo page.tsx:9-11](file://src/app/demo/page.tsx#L9-L11)
 
 ## Architecture Overview
-The application follows a layered architecture:
+The application follows a layered architecture with integrated authentication:
 
 | Layer | Responsibility | Key Files |
 |---|---|---|
 | Presentation | Views, modals, navigation, cart, voice, AI assistant, charts | `laris-app.tsx`, `laris-visuals.tsx` |
+| Authentication | User registration, login, password reset, session management | `login/actions.ts`, `auth/callback/route.ts`, `middleware.ts` |
 | Domain | Immutable state transitions, validation, stock accounting, order parsing | `laris-data.ts` |
 | Data Access | Mapping database rows to domain types and loading snapshots | `repo.ts` |
 | API / Mutations | Validated server actions calling Supabase RPCs | `actions.ts` |
-| Routing | Cloud vs demo entry points | `page.tsx`, `demo page.tsx` |
+| Routing | Cloud vs demo entry points with auth protection | `page.tsx`, `demo page.tsx`, `layout.tsx` |
 
 ```mermaid
 sequenceDiagram
 participant User as "User"
+participant LoginPage as "Login Page"
+participant AuthActions as "Auth Actions"
+participant Supabase as "Supabase Auth"
+participant Middleware as "Next.js Middleware"
 participant Page as "Home Page"
 participant Repo as "Repository"
-participant DB as "Supabase"
+participant DB as "Supabase Database"
 participant App as "LarisApp"
 participant Domain as "Business Functions"
 participant Action as "Server Actions"
-User->>Page : Open workspace
+User->>LoginPage : Enter credentials
+LoginPage->>AuthActions : signInAction()
+AuthActions->>Supabase : signInWithPassword()
+Supabase-->>AuthActions : Session created
+AuthActions-->>LoginPage : Redirect to "/"
+Middleware->>Supabase : getClaims()
+Supabase-->>Middleware : User claims
+Middleware->>Page : Allow access if authenticated
 Page->>Repo : loadSnapshot()
 Repo->>DB : Read business, catalog, sales, movements, customers, expenses, purchases
 DB-->>Repo : Rows
@@ -197,6 +247,191 @@ App-->>User : Receipt modal
 - [repo.ts:129-193](file://src/lib/repo.ts#L129-L193)
 - [laris-app.tsx:213-267](file://src/components/laris-app.tsx#L213-L267)
 - [actions.ts:52-96](file://src/app/actions.ts#L52-L96)
+- [middleware.ts:4-11](file://src/middleware.ts#L4-L11)
+- [supabase middleware.ts:6-39](file://src/lib/supabase/middleware.ts#L6-L39)
+
+## Authentication System
+
+### Session Management and Route Protection
+The authentication system uses Next.js middleware combined with Supabase SSR for comprehensive session management:
+
+- **Middleware Protection**: The Next.js middleware intercepts requests and manages Supabase sessions automatically.
+- **Route Guards**: Protected routes redirect unauthenticated users to `/login`, while authenticated users are redirected away from auth pages.
+- **Cookie-Based Sessions**: Supabase SSR client manages authentication cookies across server components and API routes.
+- **Environment-Aware**: All auth features gracefully degrade when Supabase is not configured, allowing local demo mode.
+
+```mermaid
+flowchart TD
+Request["Incoming Request"] --> CheckConfig{"Supabase Configured?"}
+CheckConfig --> |No| Allow["Allow request without auth"]
+CheckConfig --> |Yes| CreateClient["Create Supabase Client"]
+CreateClient --> GetClaims["Get User Claims"]
+GetClaims --> IsAuthenticated{"User Authenticated?"}
+IsAuthenticated --> |No| CheckPath{"Path is / or /onboarding?"}
+CheckPath --> |Yes| RedirectLogin["Redirect to /login"]
+CheckPath --> |No| Allow
+IsAuthenticated --> |Yes| CheckAuthPaths{"Path is /login, /register, /forgot-password?"}
+CheckAuthPaths --> |Yes| RedirectHome["Redirect to /"]
+CheckAuthPaths --> |No| Allow
+```
+
+**Diagram sources**
+- [middleware.ts:4-11](file://src/middleware.ts#L4-L11)
+- [supabase middleware.ts:6-39](file://src/lib/supabase/middleware.ts#L6-L39)
+
+**Section sources**
+- [middleware.ts:4-11](file://src/middleware.ts#L4-L11)
+- [supabase middleware.ts:6-39](file://src/lib/supabase/middleware.ts#L6-L39)
+- [supabase server.ts:7-24](file://src/lib/supabase/server.ts#L7-L24)
+
+### Registration Flow
+The registration flow handles new user account creation with email confirmation:
+
+- **Form Validation**: Zod schemas validate name, email format, and password strength (minimum 8 characters).
+- **Email Confirmation**: Users receive confirmation emails with links to `/onboarding` for workspace setup.
+- **Graceful Degradation**: If Supabase is not configured, users are redirected to login page.
+- **Error Handling**: User-friendly error messages for network issues, rate limits, and weak passwords.
+
+```mermaid
+sequenceDiagram
+participant User as "User"
+participant RegisterPage as "Register Page"
+participant RegisterForm as "Register Form"
+participant SignUpAction as "signUpAction"
+participant Supabase as "Supabase Auth"
+participant Email as "Email Service"
+User->>RegisterPage : Navigate to /register
+RegisterPage->>RegisterForm : Render registration form
+User->>RegisterForm : Submit registration data
+RegisterForm->>SignUpAction : signUpAction(formData)
+SignUpAction->>Supabase : signUp({email, password, full_name})
+Supabase-->>SignUpAction : Session or confirmation required
+alt Session exists
+SignUpAction-->>RegisterForm : Redirect to /onboarding
+else Email confirmation required
+SignUpAction->>Email : Send confirmation email
+SignUpAction-->>RegisterForm : Show confirmation notice
+end
+```
+
+**Diagram sources**
+- [register page.tsx:8-11](file://src/app/register/page.tsx#L8-L11)
+- [register form.tsx:10-35](file://src/app/register/register-form.tsx#L10-L35)
+- [login actions.ts:46-65](file://src/app/login/actions.ts#L46-L65)
+
+**Section sources**
+- [register page.tsx:8-11](file://src/app/register/page.tsx#L8-L11)
+- [register form.tsx:10-35](file://src/app/register/register-form.tsx#L10-L35)
+- [login actions.ts:46-65](file://src/app/login/actions.ts#L46-L65)
+
+### Login Flow
+The login system supports multiple authentication methods:
+
+- **Standard Login**: Email/password authentication with form validation.
+- **Judge/Demo Account**: Special one-click login for evaluation scenarios with pre-configured demo credentials.
+- **Error Translation**: Indonesian error messages mapped from Supabase error codes.
+- **Session Persistence**: Automatic session management through Supabase SSR.
+
+```mermaid
+flowchart TD
+Start(["Login Attempt"]) --> Validate["Validate email and password"]
+Validate --> CheckConfig{"Supabase configured?"}
+CheckConfig --> |No| Error["Show configuration error"]
+CheckConfig --> |Yes| TryAuth["Try sign in with credentials"]
+TryAuth --> Success{"Authentication successful?"}
+Success --> |Yes| Redirect["Redirect to /"]
+Success --> |No| MapError["Map error to user-friendly message"]
+MapError --> DisplayError["Display error message"]
+```
+
+**Diagram sources**
+- [login page.tsx:10-15](file://src/app/login/page.tsx#L10-L15)
+- [login form.tsx:10-81](file://src/app/login/login-form.tsx#L10-L81)
+- [login actions.ts:35-44](file://src/app/login/actions.ts#L35-L44)
+
+**Section sources**
+- [login page.tsx:10-15](file://src/app/login/page.tsx#L10-L15)
+- [login form.tsx:10-81](file://src/app/login/login-form.tsx#L10-L81)
+- [login actions.ts:35-44](file://src/app/login/actions.ts#L35-L44)
+
+### Password Reset Flow
+The password reset system provides secure account recovery:
+
+- **Email-Based Recovery**: Users enter their email to receive a reset link.
+- **Secure Token Handling**: Reset links contain time-limited tokens verified by Supabase.
+- **New Password Creation**: Secure password update after token validation.
+- **Rate Limiting**: Built-in protection against brute force attempts.
+
+```mermaid
+sequenceDiagram
+participant User as "User"
+participant ForgotPage as "Forgot Password Page"
+participant ResetPage as "Reset Password Page"
+participant AuthActions as "Auth Actions"
+participant Supabase as "Supabase Auth"
+participant Email as "Email Service"
+User->>ForgotPage : Enter email for reset
+ForgotPage->>AuthActions : requestPasswordResetAction(email)
+AuthActions->>Supabase : resetPasswordForEmail(email)
+Supabase->>Email : Send reset email with link
+Email-->>User : Email with reset link
+User->>ResetPage : Click reset link
+ResetPage->>AuthActions : updatePasswordAction(newPassword)
+AuthActions->>Supabase : updateUser({password})
+Supabase-->>AuthActions : Success
+AuthActions-->>ResetPage : Redirect to /
+```
+
+**Diagram sources**
+- [forgot-password page.tsx:8-11](file://src/app/forgot-password/page.tsx#L8-L11)
+- [reset-password page.tsx:8-11](file://src/app/reset-password/page.tsx#L8-L11)
+- [password forms.tsx:9-56](file://src/components/password-forms.tsx#L9-L56)
+- [login actions.ts:77-99](file://src/app/login/actions.ts#L77-L99)
+
+**Section sources**
+- [forgot-password page.tsx:8-11](file://src/app/forgot-password/page.tsx#L8-L11)
+- [reset-password page.tsx:8-11](file://src/app/reset-password/page.tsx#L8-L11)
+- [password forms.tsx:9-56](file://src/components/password-forms.tsx#L9-L56)
+- [login actions.ts:77-99](file://src/app/login/actions.ts#L77-L99)
+
+### Auth Callback Handling
+The authentication callback system processes email confirmation and password reset links:
+
+- **Code Exchange**: Converts Supabase auth codes into sessions securely.
+- **Next Parameter Support**: Preserves intended destination after authentication.
+- **Error Handling**: Graceful fallback to login page on callback failures.
+- **Origin Validation**: Ensures redirects go to trusted domains only.
+
+```mermaid
+flowchart TD
+Callback["/auth/callback?code=...&next=..."] --> ExtractParams["Extract code and next parameters"]
+ExtractParams --> ValidateNext{"Next parameter valid?"}
+ValidateNext --> |No| UseDefault["Use default '/'"]
+ValidateNext --> |Yes| UseProvided["Use provided next path"]
+UseDefault --> ExchangeCode["Exchange code for session"]
+UseProvided --> ExchangeCode
+ExchangeCode --> Success{"Exchange successful?"}
+Success --> |Yes| Redirect["Redirect to next path"]
+Success --> |No| LoginError["Redirect to /login?error=auth-callback"]
+```
+
+**Diagram sources**
+- [auth callback route.ts:5-17](file://src/app/auth/callback/route.ts#L5-L17)
+
+**Section sources**
+- [auth callback route.ts:5-17](file://src/app/auth/callback/route.ts#L5-L17)
+
+### Demo/Judge Accounts Support
+Special authentication support for evaluation and demonstration scenarios:
+
+- **Pre-configured Credentials**: Admin-configured demo accounts for quick evaluation access.
+- **One-Click Login**: Simplified judge login button on the login page.
+- **Security Controls**: Demo credentials must be explicitly configured in environment variables.
+- **Fallback Behavior**: Graceful degradation when demo accounts are not configured.
+
+**Section sources**
+- [login actions.ts:67-75](file://src/app/login/actions.ts#L67-L75)
+- [login form.tsx:45-53](file://src/app/login/login-form.tsx#L45-L53)
 
 ## Detailed Component Analysis
 
@@ -251,7 +486,7 @@ The domain library enforces business rules without mutating existing objects:
 - `getStock` aggregates signed stock movements per item.
 - `getCartTotal` validates cart contents, rejects discounts larger than the subtotal, and optionally applies a 10% restaurant tax.
 - `completeSale` validates payment methods, channels, cash received, customer phone format, and stock availability before creating a sale and stock deductions.
-- `recordPurchase` validates quantities and totals, records a purchase, adds a positive movement, recalculates average cost, and recomputes product costs based on updated inventory.
+- `recordPurchase` validates quantities and totals, records a purchase, adds a positive movement, recalculates average cost, and recomputes product costs based on recipes.
 - `createInitialState` produces reproducible historical data anchored to a specific end date.
 - `parseOrder` converts natural language into structured cart items using aliases and safe numeric parsing.
 
@@ -431,7 +666,7 @@ UI->>UI : Merge result into state
 - [actions.ts:52-96](file://src/app/actions.ts#L52-L96)
 
 #### Example: Purchase and Moving-Average Cost
-When recording a purchase, the domain function validates inputs, appends a purchase record and a positive stock movement, recalculates the inventory item’s average cost, and recomputes product costs based on recipes.
+When recording a purchase, the domain function validates inputs, appends a purchase record and a positive stock movement, recalculates the inventory item's average cost, and recomputes product costs based on recipes.
 
 ```mermaid
 flowchart TD
@@ -467,7 +702,7 @@ These patterns make error messages actionable and testable.
 - [laris-data.ts:215-305](file://src/lib/laris-data.ts#L215-L305)
 
 ## Dependency Analysis
-The core dependencies form a clear boundary between presentation, domain, and data access:
+The core dependencies form a clear boundary between presentation, domain, and data access, with authentication integrated throughout:
 
 ```mermaid
 graph TB
@@ -478,6 +713,10 @@ Repo --> DomainTypes["Shared Domain Types"]
 LarisApp --> Visuals["laris-visuals.tsx"]
 DemoPage["demo/page.tsx"] --> LarisApp
 HomePage["app/page.tsx"] --> Repo
+AuthPages["Auth Pages<br/>login/, register/, forgot-password/, reset-password/"] --> AuthActions["login/actions.ts"]
+AuthActions --> Supabase["Supabase Auth"]
+NextMiddleware["middleware.ts"] --> SessionManager["supabase/middleware.ts"]
+SessionManager --> HomePage
 ```
 
 **Diagram sources**
@@ -487,6 +726,8 @@ HomePage["app/page.tsx"] --> Repo
 - [repo.ts:82-193](file://src/lib/repo.ts#L82-L193)
 - [demo page.tsx:9-11](file://src/app/demo/page.tsx#L9-L11)
 - [page.tsx:9-17](file://src/app/page.tsx#L9-L17)
+- [middleware.ts:4-11](file://src/middleware.ts#L4-L11)
+- [supabase middleware.ts:6-39](file://src/lib/supabase/middleware.ts#L6-L39)
 
 **Section sources**
 - [laris-app.tsx:14-25](file://src/components/laris-app.tsx#L14-L25)
@@ -502,6 +743,7 @@ For large catalogs and real-time-like updates, the codebase uses several strateg
 - **Client-side filtering and pagination**: Transaction lists apply client-side filters and page sizes to reduce rendered DOM nodes.
 - **Avoiding unnecessary network calls**: Local mode avoids server calls entirely; cloud mode only calls server actions for mutations.
 - **Deterministic seed data**: Historical data generation is deterministic, avoiding random variability during tests and demos.
+- **Session caching**: Supabase SSR client caches authentication state to minimize repeated auth checks.
 
 Recommendations for further optimization:
 - Introduce virtualized lists for very large transaction or product tables.
@@ -509,6 +751,7 @@ Recommendations for further optimization:
 - Cache computed metrics more aggressively if the dataset grows significantly.
 - Use server-side aggregation for analytics when sales or movements become very large.
 - Keep catalog updates incremental where possible to avoid reloading entire product and inventory sets.
+- Implement authentication state caching to reduce repeated Supabase auth checks.
 
 [No sources needed since this section provides general guidance]
 
@@ -527,21 +770,31 @@ Common issues and their handling patterns:
 | Local storage full | Persistence fails | Notify user and keep changes session-only. |
 | Voice input unavailable | Speech recognition error | Show fallback text input and error message. |
 | Receipt scan failure | OCR API error | Surface error and allow manual purchase entry. |
+| Authentication failed | Login/signup errors | User-friendly error messages with Indonesian translations. |
+| Session expired | Redirected to login unexpectedly | Check Supabase session configuration and cookie settings. |
+| Email confirmation not received | Stuck on registration confirmation | Check spam folder and verify email service configuration. |
+| Password reset link expired | Reset password action fails | Prompt user to request a new reset link. |
+| Demo account not configured | Judge login shows error | Configure demo credentials in environment variables. |
+| Supabase not configured | All auth features disabled | Fall back to local demo mode or configure Supabase credentials. |
 
 **Section sources**
 - [laris-app.tsx:213-267](file://src/components/laris-app.tsx#L213-L267)
 - [laris-app.tsx:311-391](file://src/components/laris-app.tsx#L311-L391)
 - [laris-data.ts:143-199](file://src/lib/laris-data.ts#L143-L199)
 - [laris-data.ts:215-305](file://src/lib/laris-data.ts#L215-L305)
+- [login actions.ts:26-33](file://src/app/login/actions.ts#L26-L33)
 
 ## Conclusion
-The core Laris application architecture cleanly separates concerns:
+The core Laris application architecture cleanly separates concerns with integrated authentication:
 - `LarisApp` is the central UI container managing views, modals, navigation, cart, and business state.
 - `laris-data.ts` provides a strongly typed domain model and deterministic pure functions for cart totals, stock calculations, purchase accounting, customer segmentation, and order parsing.
 - `repo.ts` implements a repository pattern that maps Supabase rows into the same `BusinessState` consumed by the UI.
 - Server actions enforce authentication, roles, and atomic business operations, while the client retains validation and user feedback responsibilities.
 - The snapshot-based approach allows the same UI to run locally with demo data or remotely with authenticated workspace data.
+- Complete authentication system with registration, login, password reset, email confirmation, and session management.
+- Next.js middleware provides automatic route protection and session lifecycle management.
+- Environment-aware design ensures graceful degradation when Supabase is not configured.
 
-This structure makes the system testable, auditable, and resilient: business rules are isolated from UI effects, mutations are explicit, and errors are surfaced clearly to users.
+This structure makes the system testable, auditable, and resilient: business rules are isolated from UI effects, mutations are explicit, errors are surfaced clearly to users, and authentication flows provide secure access control.
 
 [No sources needed since this section summarizes without analyzing specific files]

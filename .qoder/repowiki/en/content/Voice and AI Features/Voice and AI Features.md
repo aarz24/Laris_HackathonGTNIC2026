@@ -13,6 +13,14 @@
 - [voice.jsonl](file://evals/voice.jsonl)
 </cite>
 
+## Update Summary
+**Changes Made**
+- Updated Tanya Laris copilot section to reflect complete architecture overhaul with context-aware approach
+- Enhanced tools documentation for revenue analysis, profit calculations, product ranking, stock alerts, customer segmentation, and expense breakdowns
+- Added detailed explanation of local fallback mode implementation
+- Updated workspace context loading and multi-workspace support details
+- Enhanced confidence scoring and result reliability sections
+
 ## Table of Contents
 1. [Introduction](#introduction)
 2. [Project Structure](#project-structure)
@@ -29,7 +37,7 @@ Laris provides AI-powered operational features for Indonesian F&B small business
 - Voice-to-cart ordering using the Web Speech API with Indonesian language support.
 - A deterministic local parser for text orders, with Google Gemini as a fallback for complex or audio-based orders.
 - Receipt scanning through multimodal OCR with inventory mapping, unit normalization, and price-hike detection.
-- Tanya Laris, a natural-language copilot that answers business questions using workspace data tools.
+- **Enhanced Tanya Laris copilot** with context-aware architecture supporting multi-workspace environments, featuring advanced business intelligence tools for revenue analysis, profit calculations, product ranking, stock alerts, customer segmentation, and expense breakdowns with robust local fallback mode.
 
 The system is designed to remain usable when external AI services are unavailable by falling back to deterministic logic, mock data in demo mode, or rule-based summaries.
 
@@ -86,7 +94,7 @@ Ask --> AiLib
 - Voice recognition: Browser-side speech recognition targeting Indonesian (`id-ID`), with graceful error messages when unsupported or permission denied.
 - Order parsing pipeline: Local deterministic parser first; Gemini used when configured and available, especially for audio input.
 - Receipt scanning: Multimodal OCR via Gemini, followed by inventory matching, unit normalization, and price-hike alerts.
-- Tanya Laris copilot: Rule-based local answerer when Gemini is unavailable; otherwise uses structured tools over workspace data.
+- **Enhanced Tanya Laris copilot**: Context-aware architecture with typed tools for business intelligence, including revenue analysis, profit calculations, product ranking, stock alerts, customer segmentation, and expense breakdowns with comprehensive local fallback mode.
 - Shared infrastructure: Workspace context loading, catalog injection into prompts, Zod schemas, and telemetry logging.
 
 **Section sources**
@@ -302,18 +310,57 @@ CatchError --> ReturnError["Return 502 with guidance"]
 - [route.ts (scan-receipt):109-134](file://src/app/api/ai/scan-receipt/route.ts#L109-L134)
 - [route.ts (scan-receipt):157-202](file://src/app/api/ai/scan-receipt/route.ts#L157-L202)
 
-### Tanya Laris Copilot
-Tanya Laris answers business questions in Indonesian:
-- In local mode, it returns rule-based summaries about revenue, profit, top products, and low stock.
-- In cloud mode without Gemini, it still returns a local rule-based answer.
-- With Gemini, it exposes typed tools for:
-  - Revenue summary over a configurable period.
-  - Estimated gross profit based on recipe costs.
-  - Top-selling products.
-  - Low-stock alerts.
-  - Customer segment counts.
-  - Expense breakdown.
-- The model is constrained to four tool-use steps to limit latency and token usage.
+### Enhanced Tanya Laris Copilot with Context-Aware Architecture
+**Updated** Complete architecture overhaul with context-aware approach supporting multi-workspace environments and enhanced business intelligence tools.
+
+Tanya Laris now features a sophisticated context-aware architecture that provides comprehensive business intelligence through typed tools:
+
+#### Context-Aware Workspace Support
+- Multi-workspace environment support with proper authentication and authorization
+- Dynamic workspace context loading with business state isolation
+- Secure workspace boundary enforcement through Supabase RLS policies
+- Automatic workspace switching based on user membership
+
+#### Advanced Business Intelligence Tools
+The enhanced copilot exposes six specialized tools for business analysis:
+
+1. **Revenue Analysis Tool** (`getRevenueSummary`)
+   - Calculates revenue, transaction count, and average order value over configurable periods
+   - Supports 1-90 day ranges with formatted currency output
+   - Provides start/end dates for analytical periods
+
+2. **Profit Calculation Tool** (`getProfitSummary`)
+   - Estimates gross profit based on recipe costs and current pricing
+   - Calculates margin percentages with clear disclaimers about operational costs
+   - Uses real-time recipe cost data for accurate COGS estimation
+
+3. **Product Ranking Tool** (`getTopSellingProducts`)
+   - Ranks products by sales volume across all recorded transactions
+   - Supports configurable limits (1-10 products)
+   - Returns product names and quantities sold
+
+4. **Stock Alert Tool** (`getLowStockAlerts`)
+   - Identifies ingredients below reorder points
+   - Includes supplier information and current stock levels
+   - Prioritizes low-stock items for procurement planning
+
+5. **Customer Segmentation Tool** (`getCustomerSegmentsSummary`)
+   - Analyzes RFM (Recency, Frequency, Monetary) customer segments
+   - Categorizes customers into: Juara, Setia, Potensial, Berisiko, Hilang
+   - Provides segment counts for targeted marketing strategies
+
+6. **Expense Breakdown Tool** (`getExpensesBreakdown`)
+   - Aggregates operational expenses by category
+   - Calculates total expenses with formatted currency display
+   - Enables financial analysis and budgeting decisions
+
+#### Local Fallback Mode Implementation
+When Gemini is unavailable, the system provides comprehensive local fallback functionality:
+
+- **Rule-based Answer Engine**: Sophisticated pattern matching for common business queries
+- **Real-time Data Access**: Direct access to workspace business state without AI dependency
+- **Intelligent Query Routing**: Automatic detection of query types and appropriate local responses
+- **Graceful Degradation**: Maintains core functionality while clearly indicating local mode operation
 
 ```mermaid
 sequenceDiagram
@@ -321,22 +368,33 @@ participant Client as "LarisApp Frontend"
 participant AskRoute as "/api/ai/ask"
 participant Tools as "Workspace Data Tools"
 participant Gemini as "Google Gemini"
+participant LocalRules as "Local Rule Engine"
 Client->>AskRoute : POST question + history
 AskRoute->>AskRoute : Validate request schema
 AskRoute->>AskRoute : Load workspace context
 alt Gemini unavailable
-AskRoute-->>Client : Local rule-based answer
+AskRoute->>LocalRules : Process with local rules
+LocalRules->>LocalRules : Pattern match query type
+LocalRules-->>AskRoute : Rule-based answer
+AskRoute-->>Client : Local answer with source="local-rules"
 else Gemini available
 AskRoute->>Gemini : generateText with tools
-Gemini->>Tools : Call getRevenueSummary / getProfitSummary / etc.
-Tools-->>Gemini : Structured data
+Gemini->>Tools : Call specific business intelligence tool
+Tools-->>Gemini : Structured business data
 Gemini-->>AskRoute : Natural language answer
-AskRoute-->>Client : Answer with source=gemini
+AskRoute-->>Client : Answer with source="gemini"
 end
 ```
 
 **Diagram sources**
 - [route.ts (ask):77-216](file://src/app/api/ai/ask/route.ts#L77-L216)
+
+#### Enhanced Confidence Scoring and Reliability
+The updated system provides improved confidence indicators:
+- **Source Attribution**: Clear indication of whether responses come from Gemini, local rules, or fallback systems
+- **Tool Usage Tracking**: Monitoring which business intelligence tools were invoked
+- **Data Freshness Indicators**: Timestamps and period specifications for analytical queries
+- **Limitation Transparency**: Clear communication about data availability and calculation limitations
 
 **Section sources**
 - [route.ts (ask):9-16](file://src/app/api/ai/ask/route.ts#L9-L16)
@@ -346,7 +404,7 @@ end
 
 ### Confidence Scoring and Result Reliability
 The implementation does not expose numeric confidence scores. Instead, reliability is communicated through:
-- `source` field indicating whether results came from Gemini, local parser, fallback parser, or mock OCR.
+- `source` field indicating whether results came from Gemini, local parser, fallback parser, mock OCR, or local rules.
 - `unknown` arrays for unrecognized order items.
 - `skippedLines` for receipt lines that could not be safely normalized.
 - `notice` fields for mock OCR and skipped-line warnings.
@@ -357,6 +415,7 @@ For future enhancements, confidence scoring could be added by:
 - Returning Gemini model confidence or token usage metrics.
 - Computing parser match quality based on alias length, modifier coverage, and clause ambiguity.
 - Tracking OCR line-level uncertainty through repeated extraction or multi-image prompts.
+- Implementing tool invocation confidence scores for business intelligence queries.
 
 **Section sources**
 - [route.ts (parse-order):95-127](file://src/app/api/ai/parse-order/route.ts#L95-L127)
@@ -409,6 +468,7 @@ Recommendations:
 - Introduce retry budgets and circuit breakers for Gemini calls.
 - Surface latency and token usage in telemetry dashboards.
 - Consider streaming responses for long-running AI queries.
+- Implement caching for frequently accessed business intelligence data.
 
 [No sources needed since this section provides general guidance]
 
@@ -419,7 +479,7 @@ Common issues and their handling:
 - Missing Gemini configuration:
   - Parse order returns 503 for audio-only requests; text falls back to local parser.
   - Scan receipt returns 503 in cloud mode; local demo returns mock OCR.
-  - Tanya Laris returns local rule-based answers.
+  - Tanya Laris returns local rule-based answers with clear source attribution.
 - Invalid workspace or authentication:
   - Context loading throws structured errors with 401 or 403 status codes.
 - Empty or incomplete catalog/inventory:
@@ -434,6 +494,7 @@ Operational checks:
 - Verify `.env` contains `GOOGLE_GENERATIVE_AI_API_KEY` for full AI features.
 - Ensure Supabase is configured for cloud mode workspace data.
 - Run voice evaluation benchmark to validate deterministic parser accuracy.
+- Monitor workspace context loading for multi-workspace deployments.
 
 **Section sources**
 - [laris-app.tsx:342-359](file://src/components/laris-app.tsx#L342-L359)
@@ -444,11 +505,11 @@ Operational checks:
 - [README.md:51-57](file://README.md#L51-L57)
 
 ## Conclusion
-Laris’s voice and AI features combine robust frontend UX, strict server-side validation, deterministic fallbacks, and structured AI integration. The system prioritizes reliability:
+Laris's voice and AI features combine robust frontend UX, strict server-side validation, deterministic fallbacks, and structured AI integration. The system prioritizes reliability:
 - Voice input works locally even without AI services.
 - Orders are parsed deterministically and only enhanced by Gemini when safe.
 - Receipt scanning normalizes units and highlights price changes.
-- Tanya Laris provides actionable business insights grounded in workspace data.
+- **Enhanced Tanya Laris provides comprehensive business intelligence** through context-aware architecture with advanced tools for revenue analysis, profit calculations, product ranking, stock alerts, customer segmentation, and expense breakdowns, all supported by robust local fallback mechanisms.
 - Telemetry and clear error responses help operators diagnose issues without compromising core operations.
 
-Future improvements should focus on confidence scoring, rate limiting, observability, and controlled retries while preserving the offline-first design philosophy.
+Future improvements should focus on confidence scoring, rate limiting, observability, controlled retries, and enhanced business intelligence capabilities while preserving the offline-first design philosophy.

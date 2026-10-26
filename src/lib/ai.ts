@@ -22,6 +22,8 @@ export class AiRequestError extends Error {
 
 export interface AiContext {
   mode: AppMode;
+  /** Gemini (billable API) may only run for authenticated cloud requests; local mode always uses offline fallbacks. */
+  allowGemini: boolean;
   businessId: string | null;
   today: string;
   state: BusinessState;
@@ -29,7 +31,9 @@ export interface AiContext {
 
 export async function requireAiContext(mode: AppMode, catalogOnly = false): Promise<AiContext> {
   const today = jakartaToday();
-  if (mode === "local") return { mode, businessId: null, today, state: createInitialState(today) };
+  // Local/demo mode is unauthenticated by design and must never reach the billable Gemini API:
+  // routes only get offline fallbacks (rule-based answers, local parser, mock OCR).
+  if (mode === "local") return { mode, allowGemini: false, businessId: null, today, state: createInitialState(today) };
   if (!isCloudConfigured) throw new AiRequestError("Workspace cloud belum dikonfigurasi.", 503);
 
   const supabase = await createClient();
@@ -41,7 +45,7 @@ export async function requireAiContext(mode: AppMode, catalogOnly = false): Prom
   if (!catalogOnly) {
     const snapshot = await loadSnapshot(supabase);
     if (!snapshot) throw new AiRequestError("Workspace tidak ditemukan.", 403);
-    return { mode, businessId: snapshot.businessId, today: snapshot.today, state: snapshot.state };
+    return { mode, allowGemini: true, businessId: snapshot.businessId, today: snapshot.today, state: snapshot.state };
   }
 
   const [catalog, business] = await Promise.all([
@@ -51,6 +55,7 @@ export async function requireAiContext(mode: AppMode, catalogOnly = false): Prom
   if (business.error) throw new Error(business.error.message);
   return {
     mode,
+    allowGemini: true,
     businessId: membership.businessId,
     today,
     state: {

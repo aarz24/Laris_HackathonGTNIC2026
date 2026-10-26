@@ -3,6 +3,7 @@ import { generateText, Output } from "ai";
 import { z } from "zod";
 import { aiErrorResponse, catalogContext, getGoogleModel, logAiTelemetry, requireAiContext, type AiContext } from "@/lib/ai";
 import type { InventoryItem } from "@/lib/laris-data";
+import { aiRateLimit } from "@/lib/rate-limit";
 
 export const dynamic = "force-dynamic";
 
@@ -95,6 +96,9 @@ export async function POST(request: NextRequest) {
   if (!imageBytes) return NextResponse.json({ error: "Gambar kosong atau tidak valid." }, { status: 400 });
   if (imageBytes > MAX_IMAGE_BYTES) return NextResponse.json({ error: "Ukuran foto maksimal 8 MB." }, { status: 413 });
 
+  const limited = await aiRateLimit(request, "scan-receipt", parsedMode.data);
+  if (limited) return limited;
+
   let context: AiContext;
   try {
     context = await requireAiContext(parsedMode.data, true);
@@ -104,7 +108,8 @@ export async function POST(request: NextRequest) {
   const ingredients = context.state.inventory ?? [];
   if (!ingredients.length) return NextResponse.json({ error: "Tambahkan bahan baku sebelum memindai nota pembelian." }, { status: 422 });
   const inventoryMap = new Map(ingredients.map((item) => [item.id, item]));
-  const googleSetup = getGoogleModel();
+  // Gemini only for authenticated cloud requests; local/demo mode always uses the mock OCR fallback.
+  const googleSetup = context.allowGemini ? getGoogleModel() : null;
 
   if (!googleSetup) {
     if (context.mode === "cloud") return NextResponse.json({ error: "Pemindaian nota cloud membutuhkan GOOGLE_GENERATIVE_AI_API_KEY. Pembelian manual tetap tersedia." }, { status: 503 });
@@ -129,7 +134,7 @@ export async function POST(request: NextRequest) {
       }],
       total,
       source: "mock-ocr",
-      notice: "Simulasi OCR demo lokal, bukan hasil pembacaan foto. Isi kunci Gemini untuk OCR sungguhan.",
+      notice: "Simulasi OCR demo lokal, bukan hasil pembacaan foto. OCR sungguhan tersedia di mode cloud setelah masuk.",
     });
   }
 

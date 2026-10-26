@@ -1,0 +1,1 @@
+Migrations are applied through the Supabase CLI in order (`supabase db push` or `supabase migration up`); they assume a fresh Supabase project with Auth enabled because they reference `auth.users` and `auth.uid()` directly.

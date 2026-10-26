@@ -1,0 +1,1 @@
+PostgreSQL with PL/pgSQL and SQL functions, Supabase Auth (`auth.uid()`, `auth.users`), Row Level Security policies, `pg_trgm` extension for GIN trigram indexes on product names, and Supabase Storage buckets.

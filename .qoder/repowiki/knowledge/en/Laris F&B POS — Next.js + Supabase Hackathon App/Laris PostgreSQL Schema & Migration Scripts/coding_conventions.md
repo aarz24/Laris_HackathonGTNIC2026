@@ -1,0 +1,6 @@
+- Every business-scoped table carries a `business_id uuid not null` foreign key to `public.business` and uses soft deletes via a nullable `deleted_at timestamptz` column.
+- Money values are stored as `bigint` rupiah (no decimals) while quantities use `numeric(14,3)` in base units, with explicit `>= 0` or `> 0` CHECK constraints on every monetary/quantity column.
+- All client-writable mutations go through `SECURITY DEFINER` PL/pgSQL functions in `public.*` that call `private.is_member(...)` to re-check membership and role before any write, rather than relying solely on RLS policies.
+- Tenant integrity is enforced with `BEFORE INSERT OR UPDATE` triggers that compare referenced rows' `business_id` against the new row's `business_id` and raise `errcode = '23514'` on mismatch.
+- Audit trails are appended via `insert into public.audit_log (business_id, actor_id, action, entity, entity_id, data)` at the end of every mutation function, using `jsonb_build_object` for structured metadata.
+- Idempotent writes accept an optional `idempotency_key text` parameter, enforce length bounds, and wrap the insert in a `BEGIN ... EXCEPTION WHEN unique_violation THEN SELECT id ... END` block so concurrent retries return the existing row.

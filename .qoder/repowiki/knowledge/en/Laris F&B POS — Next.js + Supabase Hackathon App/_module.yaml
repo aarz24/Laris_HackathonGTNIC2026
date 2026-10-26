@@ -1,0 +1,16 @@
+schema_version: 1
+module_path: ""
+title: Laris F&B POS — Next.js + Supabase Hackathon App
+scope:
+    - README.md
+    - .gitignore
+    - eslint.config.mjs
+    - next.config.ts
+    - package.json
+    - postcss.config.mjs
+    - tsconfig.json
+    - implementation_plan.md
+    - PRD_Laris_GTNIC2026.md
+source_files: []
+depends_on: []
+related_to: []

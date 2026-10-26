@@ -1,0 +1,1 @@
+Supabase migration scripts that define the Laris multi-tenant POS schema, RLS policies, transactional PL/pgSQL functions, and storage bucket for a F&B business management app.

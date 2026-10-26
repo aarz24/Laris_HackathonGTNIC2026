@@ -1,0 +1,1 @@
+Node-based development utilities for seeding the Supabase demo tenant, testing RLS isolation, tokenizing UI CSS, and benchmarking the Indonesian voice-order parser.

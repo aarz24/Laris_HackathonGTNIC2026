@@ -3,6 +3,7 @@ import { generateText, isStepCount, tool } from "ai";
 import { z } from "zod";
 import { aiErrorResponse, catalogContext, getGoogleModel, logAiTelemetry, requireAiContext, type AiContext } from "@/lib/ai";
 import { currency, getStock, type BusinessState, type Sale } from "@/lib/laris-data";
+import { aiRateLimit } from "@/lib/rate-limit";
 
 export const dynamic = "force-dynamic";
 
@@ -83,6 +84,9 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: "Pertanyaan tidak valid. Gunakan teks 1–2000 karakter dan riwayat percakapan yang sesuai." }, { status: 400 });
   }
 
+  const limited = await aiRateLimit(request, "ask", input.mode);
+  if (limited) return limited;
+
   let context: AiContext;
   try {
     context = await requireAiContext(input.mode);
@@ -90,7 +94,8 @@ export async function POST(request: NextRequest) {
     return aiErrorResponse(error, "Data workspace belum dapat dimuat. Coba lagi.");
   }
   const { state } = context;
-  const googleSetup = getGoogleModel();
+  // Gemini only for authenticated cloud requests; local/demo mode always uses the rule-based answer.
+  const googleSetup = context.allowGemini ? getGoogleModel() : null;
   if (!googleSetup) return NextResponse.json({ answer: localAnswer(input.question, state), source: "local-rules" });
 
   const periodSales = (days: number) => salesInPeriod(state.sales, context.today, days);

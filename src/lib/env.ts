@@ -22,6 +22,16 @@ export function serverEnv() {
   };
 }
 
+/**
+ * The one-click judge/demo login needs credentials, and in production it must also be
+ * opted into explicitly (e.g. for the hackathon judging deployment) via LARIS_ALLOW_DEMO_LOGIN=true.
+ */
+export function isDemoLoginEnabled(): boolean {
+  const { demoEmail, demoPassword } = serverEnv();
+  if (!demoEmail || !demoPassword) return false;
+  return process.env.NODE_ENV !== "production" || process.env.LARIS_ALLOW_DEMO_LOGIN?.trim() === "true";
+}
+
 /** Today's date in Asia/Jakarta as YYYY-MM-DD (the business day used by cloud mode). */
 export function jakartaToday(now = new Date()): string {
   return new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Jakarta", year: "numeric", month: "2-digit", day: "2-digit" }).format(now);

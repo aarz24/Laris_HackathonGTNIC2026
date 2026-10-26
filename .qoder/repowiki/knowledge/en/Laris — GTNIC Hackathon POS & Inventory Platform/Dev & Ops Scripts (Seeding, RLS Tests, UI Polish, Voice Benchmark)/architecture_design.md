@@ -1,7 +1,0 @@
-Scripts are split by concern into three categories, all executed directly with Node ≥ 22.18 using native TS type stripping:
-- Data & auth helpers live in `lib.ts`, which exposes `adminClient()` (service-role, bypasses RLS), `userClient()` (anonymous client used for RLS-scoped queries), env loaders (`requireEnv`), `ensureUser` (idempotent user creation/update), and tenant constants (`DEMO_SLUG`, `TENANT_B_SLUG`).
-- Database bootstrap is in `seed.ts`: it resets a business via explicit child-table deletes, then inserts Kopi Senja demo data plus a second 'Warung Bu Sri' tenant used to verify tenant isolation.
-- RLS verification is in `rls.test.ts`, a Node `node:test` suite that signs in both tenants via `userClient()`, asserts cross-tenant reads/writes fail across every table listed in `TABLES`, and checks anonymous access returns nothing.
-- CSS tooling (`beautify-ui.mjs`, `tokenize-ui.mjs`) reads/writes `src/app/globals.css` via `node:fs`, replacing raw hex colors with CSS custom properties and injecting a `/* laris-polish */` marker block for runtime polish.
-- The voice benchmark (`eval-voice.ts`) loads `evals/voice.jsonl`, runs each utterance through `parseOrder` from `src/lib/laris-data.ts`, and exits non-zero when overall accuracy falls below the 90% PRD target.
-Dependency direction is one-way: scripts import shared code from `../src/lib/laris-data.ts` and `./lib.ts`; nothing in `src/` imports back into this module.

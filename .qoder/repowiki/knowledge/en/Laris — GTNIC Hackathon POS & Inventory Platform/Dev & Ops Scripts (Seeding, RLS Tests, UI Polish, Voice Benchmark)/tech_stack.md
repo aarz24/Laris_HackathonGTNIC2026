@@ -1,1 +1,0 @@
-Node.js ≥ 22.18 native TS execution (no ts-node); Supabase JS client (`@supabase/supabase-js`) with service-role key for admin operations; Node built-in `node:test` + `node:assert/strict` for RLS test runner.

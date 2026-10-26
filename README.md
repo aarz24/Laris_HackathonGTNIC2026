@@ -41,12 +41,21 @@ Mode cloud diperlukan untuk akun dan data usaha persisten.
 1. Buat project Supabase.
 2. Salin `.env.example` menjadi `.env` dan isi URL serta publishable/anon key. Next.js dan script membaca `.env`; `.env.local` dapat dipakai untuk override lokal.
 3. Isi `NEXT_PUBLIC_APP_URL` dengan origin aplikasi. Untuk lokal, gunakan `http://localhost:3000`; untuk produksi, gunakan origin HTTPS publik.
-4. Terapkan seluruh migration di `supabase/migrations/` secara berurutan: `0001_schema.sql`, `0002_rls.sql`, `0003_functions.sql`, `0004_workspaces.sql`, `0005_production_hardening.sql`, lalu `0006_storage.sql`. Jangan hanya menerapkan migration terbaru pada database kosong.
+4. Terapkan seluruh migration di `supabase/migrations/` secara berurutan: `0001_schema.sql`, `0002_rls.sql`, `0003_functions.sql`, `0004_workspaces.sql`, `0005_production_hardening.sql`, `0006_storage.sql`, `0007_soft_delete_and_edit.sql` (hapus/ubah menu, bahan, pelanggan, pengeluaran, dan anggota tim), lalu `0008_configurable_tax.sql` (tarif pajak dari Pengaturan). Jangan hanya menerapkan migration terbaru pada database kosong. Migration 0007 dan 0008 aman dijalankan ulang.
 5. Di Supabase Auth, atur Site URL ke origin aplikasi dan tambahkan `<origin>/auth/callback` ke redirect URLs.
-6. Isi `SUPABASE_SERVICE_ROLE_KEY` hanya di server. Key ini diperlukan untuk mengundang anggota yang belum memiliki akun serta untuk script administratif.
+6. Isi `SUPABASE_SERVICE_ROLE_KEY` hanya di environment server (seperti `.env` lokal atau variabel rahasia di platform hosting). **Key ini sangat sensitif** dan tidak pernah dikirim ke browser. Laris membutuhkannya untuk fitur administratif seperti mengundang anggota tim baru melalui email dan mengunggah gambar menu ke storage. Jika key ini tidak diisi, fitur tersebut akan menampilkan pesan error yang informatif alih-alih gagal tanpa penjelasan.
 7. Jalankan aplikasi, buka `/register`, konfirmasi email, lalu selesaikan `/onboarding`. Usaha baru tidak diisi transaksi atau pelanggan fiktif.
 
-Untuk kebutuhan demo cloud, jalankan `npm run db:seed` pada **project pengembangan**, bukan database produksi. Jika `LARIS_DEMO_EMAIL` dan `LARIS_DEMO_PASSWORD` diisi, halaman login menampilkan tombol **Masuk sebagai Juri**. Jangan mengaktifkan kredensial demo pada deployment publik produksi.
+## Keamanan & AI
+
+- **Isolasi Data**: Laris menggunakan Supabase Row Level Security (RLS) secara ketat pada setiap tabel. Pengguna hanya dapat membaca dan menulis data milik `business_id` mereka sendiri.
+- **Mutasi Terproteksi**: Semua perubahan data penting (transaksi, stok, keuangan) dilakukan melalui database functions (RPC) dengan `SECURITY DEFINER` untuk menjamin integritas data dan pengecekan peran (owner/manager/kasir).
+- **Audit Log**: Setiap tindakan administratif dicatat dalam tabel audit log untuk transparansi operasional.
+- **AI Authentication**: Permintaan AI mode cloud (`/api/ai/*`) wajib memiliki sesi login dan keanggotaan workspace. Mode `/demo` tidak memerlukan login, tetapi tidak pernah memanggil Gemini. Semua endpoint AI dibatasi rate limit per pengguna/IP (in-memory per instance server; gunakan Redis/Upstash bila butuh batas global lintas instance).
+- **Gemini & Billable API**: Fitur AI yang menggunakan Gemini API (Tanya Laris dengan LLM, OCR Nota, Pesanan Suara) hanya aktif pada mode cloud untuk pengguna yang sudah masuk. Mode `/demo` lokal menggunakan logika berbasis aturan (rule-based) dan parser lokal agar tidak mengonsumsi kuota API secara tidak perlu.
+- **Koreksi data**: Menu, bahan, pelanggan, dan pengeluaran dihapus secara *soft delete* sehingga riwayat transaksi dan ledger stok tetap utuh. Bahan yang masih dipakai resep tidak dapat dihapus.
+
+Untuk kebutuhan demo cloud, jalankan `npm run db:seed` pada **project pengembangan**, bukan database produksi. Jika `LARIS_DEMO_EMAIL` dan `LARIS_DEMO_PASSWORD` diisi, halaman login menampilkan tombol **Masuk sebagai Juri** saat development. Pada build produksi tombol ini tersembunyi kecuali `LARIS_ALLOW_DEMO_LOGIN=true`; aktifkan hanya pada deployment khusus penjurian, bukan deployment untuk pelanggan nyata.
 
 ## Perilaku AI dan Offline
 

@@ -1,0 +1,1 @@
+Node ≥ 22.18 native TypeScript (no ts-node/bundler); Supabase JS SDK v2 (`@supabase/supabase-js`) for both service-role and anonymous clients; Node built-in `node:test` for RLS assertions.
