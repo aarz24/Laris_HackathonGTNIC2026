@@ -1,8 +1,9 @@
 "use client";
 
-import { useId, useState } from "react";
+import { useId, useState, type ReactNode } from "react";
 import { ArrowUpRight, Coffee, Sparkles } from "lucide-react";
 import { currency } from "@/lib/laris-data";
+import type { View } from "@/lib/laris-guide";
 
 export function LarisMark({ small = false }: { small?: boolean }) {
   return <span className={`laris-mark ${small ? "small" : ""}`} aria-hidden="true"><svg viewBox="0 0 32 32" fill="none"><path d="M15 16C6 16 4 11 6 6c5-2 10 0 10 9M17 16c9 0 11 5 9 10-5 2-10 0-10-9M16 15C16 6 21 4 26 6c2 5 0 10-9 10M16 17c0 9-5 11-10 9-2-5 0-10 9-10" fill="currentColor"/></svg></span>;
@@ -68,6 +69,64 @@ export function ScoreRing({ score = 78, small = false }: { score?: number; small
 
 export function EmptyState({ title, description }: { title: string; description: string }) {
   return <div className="empty-state"><span><Coffee size={30}/></span><h3>{title}</h3><p>{description}</p></div>;
+}
+
+const pageArt: Record<View, ReactNode> = {
+  overview: <>
+    <rect x="6" y="8" width="36" height="30" rx="4" fill="var(--surface)"/>
+    <rect x="12" y="24" width="6" height="9" rx="1" fill="var(--green-soft)"/><rect x="21" y="19" width="6" height="14" rx="1" fill="var(--green)"/><rect x="30" y="14" width="6" height="19" rx="1" fill="var(--saffron)"/>
+    <path d="M19 38v4m10-4v4m-14 0h18"/>
+  </>,
+  pos: <>
+    <path d="M15 6h14v14H15z" fill="var(--surface)"/><path d="M18 10h8m-8 3.5h5" strokeWidth="1.5"/>
+    <path d="M9 18h30l3 14H6z" fill="var(--green-soft)"/><rect x="29" y="21" width="7" height="4" rx="1" fill="var(--saffron)" strokeWidth="1.5"/>
+    <circle cx="13" cy="23" r="1.4" fill="var(--green-dark)" stroke="none"/><circle cx="18" cy="23" r="1.4" fill="var(--green-dark)" stroke="none"/><circle cx="23" cy="23" r="1.4" fill="var(--green-dark)" stroke="none"/><circle cx="13" cy="27.5" r="1.4" fill="var(--green-dark)" stroke="none"/><circle cx="18" cy="27.5" r="1.4" fill="var(--green-dark)" stroke="none"/><circle cx="23" cy="27.5" r="1.4" fill="var(--green-dark)" stroke="none"/>
+    <rect x="5" y="32" width="38" height="9" rx="2" fill="var(--surface)"/><path d="M18 36.5h12"/>
+  </>,
+  transactions: <>
+    <rect x="15" y="6" width="22" height="30" rx="2" fill="var(--green-soft)" transform="rotate(8 26 21)"/>
+    <path d="M10 8h22v30l-3.7-2.5-3.6 2.5-3.7-2.5-3.7 2.5-3.6-2.5-3.7 2.5z" fill="var(--surface)"/>
+    <path d="M14 15h14M14 20h10M14 25h12" strokeWidth="1.5"/><path d="M14 30h14" stroke="var(--saffron)" strokeWidth="2.5"/>
+  </>,
+  products: <>
+    <rect x="24" y="7" width="18" height="24" rx="2" fill="var(--surface)"/><path d="M28 13h10m-10 5h10m-10 5h6" strokeWidth="1.5"/>
+    <path d="M14 16c-2-2 2-3 0-5m6 5c-2-2 2-3 0-5" stroke="var(--green-ink)" strokeWidth="1.5"/>
+    <path d="M28 23h2a4 4 0 0 1 0 8h-2"/><path d="M8 20h20v10a8 8 0 0 1-8 8h-4a8 8 0 0 1-8-8z" fill="var(--saffron)"/><path d="M5 42h26"/>
+  </>,
+  inventory: <>
+    <rect x="6" y="18" width="11" height="22" rx="3" fill="var(--surface)"/><rect x="8" y="27" width="7" height="11" rx="1.5" fill="var(--green)" stroke="none"/><rect x="7" y="14" width="9" height="4" rx="1" fill="var(--green-dark)"/>
+    <rect x="19" y="22" width="11" height="18" rx="3" fill="var(--surface)"/><rect x="21" y="34" width="7" height="4" rx="1.5" fill="var(--saffron)" stroke="none"/><rect x="20" y="18" width="9" height="4" rx="1" fill="var(--green-dark)"/>
+    <rect x="32" y="16" width="11" height="24" rx="3" fill="var(--surface)"/><rect x="34" y="22" width="7" height="16" rx="1.5" fill="var(--green-soft)" stroke="none"/><rect x="33" y="12" width="9" height="4" rx="1" fill="var(--green-dark)"/>
+    <path d="M3 41h42" strokeWidth="2.5"/>
+  </>,
+  purchases: <>
+    <rect x="25" y="22" width="19" height="18" rx="2" fill="var(--saffron)"/><path d="M34.5 22v7"/>
+    <path d="M6 16h22l-2 24H8z" fill="var(--green-soft)"/><path d="M12 20v-6a5 5 0 0 1 10 0v6"/>
+  </>,
+  customers: <>
+    <rect x="5" y="11" width="38" height="26" rx="4" fill="var(--surface)"/><path d="M10 17h12" strokeWidth="1.5"/>
+    <circle cx="12" cy="27" r="3.2" fill="var(--green)"/><circle cx="20" cy="27" r="3.2" fill="var(--green)"/><circle cx="28" cy="27" r="3.2" fill="var(--green)"/>
+    <circle cx="36" cy="27" r="3.2" fill="var(--saffron-light)" stroke="var(--saffron-dark)" strokeDasharray="2 1.6"/>
+  </>,
+  storefront: <>
+    <rect x="8" y="20" width="32" height="20" fill="var(--surface)"/><rect x="12" y="25" width="10" height="8" rx="1" fill="var(--green-soft)"/><path d="M26 40V28h8v12" fill="var(--green-soft)"/>
+    <path d="M6 12h36l2 8H4z" fill="var(--surface)" stroke="none"/><path d="M13.2 12h7.2l-.4 8h-8zm14.4 0h7.2l1.2 8h-8z" fill="var(--saffron)" stroke="none"/><path d="M6 12h36l2 8H4z"/>
+    <path d="M3 40h42"/>
+  </>,
+  finance: <>
+    <rect x="23" y="24" width="5" height="14" rx="1" fill="var(--green-soft)"/><rect x="31" y="18" width="5" height="20" rx="1" fill="var(--green)"/><rect x="39" y="11" width="5" height="27" rx="1" fill="var(--green-dark)"/>
+    <path d="M5 33v4c0 1.7 3.1 3 7 3s7-1.3 7-3v-4" fill="var(--saffron)"/><ellipse cx="12" cy="33" rx="7" ry="3" fill="var(--saffron)"/>
+    <path d="M5 26v4c0 1.7 3.1 3 7 3s7-1.3 7-3v-4" fill="var(--saffron)"/><ellipse cx="12" cy="26" rx="7" ry="3" fill="var(--saffron-light)"/>
+  </>,
+  team: <>
+    <circle cx="30" cy="15" r="5" fill="var(--surface)"/><path d="M21 35a9 9 0 0 1 18 0z" fill="var(--green-soft)"/>
+    <circle cx="18" cy="19" r="6" fill="var(--surface)"/><path d="M7 41a11 11 0 0 1 22 0z" fill="var(--green)"/>
+    <circle cx="37" cy="34" r="6" fill="var(--saffron)"/><path d="m34.3 34 2 2 3.5-4"/>
+  </>,
+};
+
+export function PageArt({ view }: { view: View }) {
+  return <span className="page-art" aria-hidden="true"><svg viewBox="0 0 48 48" fill="none"><g stroke="var(--green-dark)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">{pageArt[view]}</g></svg></span>;
 }
 
 export function AiBadge() { return <span className="ai-badge"><Sparkles size={11}/> LARIS AI</span>; }

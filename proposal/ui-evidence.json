@@ -1,0 +1,58 @@
+{
+  "scope": "Local fictional demo only; no checkout submitted; isolated Chrome profile",
+  "screenshots": [
+    {
+      "title": "Demo Laris",
+      "url": "http://localhost:3000/demo#overview",
+      "heading": "Selamat siang, Raka",
+      "viewport": [
+        1366,
+        900
+      ],
+      "documentWidth": 1358,
+      "imageErrors": [],
+      "path": "C:\\Users\\LENOVO\\Music\\hackathon_gtnic\\proposal\\assets\\overview.png",
+      "horizontalOverflow": false
+    },
+    {
+      "title": "Demo Laris",
+      "url": "http://localhost:3000/demo#pos",
+      "heading": "Kasir",
+      "viewport": [
+        1366,
+        900
+      ],
+      "documentWidth": 1358,
+      "imageErrors": [],
+      "path": "C:\\Users\\LENOVO\\Music\\hackathon_gtnic\\proposal\\assets\\pos.png",
+      "horizontalOverflow": false
+    },
+    {
+      "title": "Demo Laris",
+      "url": "http://localhost:3000/demo#inventory",
+      "heading": "Stok bahan",
+      "viewport": [
+        1366,
+        900
+      ],
+      "documentWidth": 1358,
+      "imageErrors": [],
+      "path": "C:\\Users\\LENOVO\\Music\\hackathon_gtnic\\proposal\\assets\\inventory.png",
+      "horizontalOverflow": false
+    },
+    {
+      "title": "Demo Laris",
+      "url": "http://localhost:3000/demo#pos",
+      "heading": "Kasir",
+      "viewport": [
+        390,
+        844
+      ],
+      "documentWidth": 390,
+      "imageErrors": [],
+      "path": "C:\\Users\\LENOVO\\Music\\hackathon_gtnic\\proposal\\assets\\pos-mobile.png",
+      "horizontalOverflow": false
+    }
+  ],
+  "runtimeExceptions": []
+}
