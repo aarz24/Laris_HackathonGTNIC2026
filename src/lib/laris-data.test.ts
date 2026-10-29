@@ -1,12 +1,13 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import type { BusinessState, CartItem, Sale } from "./laris-data";
+import type { BusinessState, CartItem, Sale, SaleItem } from "./laris-data";
 
 // Native Node requires a .ts URL. A dynamic URL avoids requiring a project-wide
 // allowImportingTsExtensions change, while the type query preserves type checking.
 const {
   DEMO_DATE, products, inventory, createInitialState, currency, getStock,
   getCartTotal, completeSale, recordPurchase, parseOrder, exportSalesCsv, timestamp,
+  reconcileCart, mapSaleItem, getSaleLines, getSaleItemName, getSalesFinancials, getProductSales,
   deleteProduct, deleteInventoryItem, deleteCustomer, deleteExpense, updateCustomer,
 }: typeof import("./laris-data") = await import(new URL("./laris-data.ts", import.meta.url).href);
 
@@ -210,7 +211,7 @@ test("sale copies input items and survives JSON persistence", () => {
   items[0].quantity = 100;
   items[0].note = "changed";
   items.push({ productId: "tea", quantity: 5 });
-  assert.deepEqual(result.sale.items, [{ productId: "kopi-susu", quantity: 1, note: "tanpa gula" }]);
+  assert.deepEqual(result.sale.items, [{ productId: "kopi-susu", quantity: 1, note: "tanpa gula", name: "Es Kopi Susu", unitPrice: 25000, unitCost: 9040 }]);
   const persisted: BusinessState = JSON.parse(JSON.stringify(result.state));
   assert.equal(getStock(persisted, "milk"), 1050);
   const next = completeSale(freezeDeep(persisted), cashInput);
@@ -537,6 +538,205 @@ test("deleteProduct removes the product and returns a new state", () => {
 
 test("deleteProduct throws for a missing product", () => {
   assert.throws(() => deleteProduct(emptyState(), "nonexistent"), /Menu tidak ditemukan/);
+});
+
+test("deleting a cart product reconciles only its lines and leaves checkout strict", () => {
+  const cart: CartItem[] = freezeDeep([
+    { productId: "kopi-susu", quantity: 1, note: "less sugar" },
+    { productId: "croissant", quantity: 2, note: "keep this note" },
+    { productId: "kopi-susu", quantity: 2, note: "tanpa es" },
+  ]);
+  const state = freezeDeep(emptyState());
+  const after = deleteProduct(state, "kopi-susu");
+  const reconciled = reconcileCart(cart, after.products!);
+  assert.deepEqual(reconciled.removed, [cart[0], cart[2]]);
+  assert.deepEqual(reconciled.items, [cart[1]]);
+  assert.strictEqual(reconciled.items[0], cart[1]);
+  assert.equal(cart.length, 3);
+  assert.equal(getCartTotal(reconciled.items, 0, false, after.products).subtotal, 44000);
+  assert.throws(() => completeSale(after, { ...cashInput, items: cart }), /Menu tidak dikenal/);
+  const result = completeSale(after, { ...cashInput, items: reconciled.items });
+  assert.equal(result.sale.items[0].note, "keep this note");
+  assert.equal(result.sale.items[0].quantity, 2);
+  assert.deepEqual(state, emptyState());
+});
+
+test("a refreshed catalog safely removes missing and unavailable cart references", () => {
+  const cart: CartItem[] = freezeDeep([
+    { productId: "kopi-susu", quantity: 1 },
+    { productId: "americano", quantity: 2 },
+    { productId: "croissant", quantity: 1 },
+  ]);
+  const catalog = products.filter(product => product.id !== "kopi-susu").map(product => product.id === "americano" ? { ...product, active: false } : product);
+  const refreshed = reconcileCart(cart, catalog);
+  assert.deepEqual(refreshed.items, [cart[2]]);
+  assert.deepEqual(refreshed.removed, [cart[0], cart[1]]);
+  assert.equal(getCartTotal(refreshed.items, 0, false, catalog).total, 22000);
+  assert.throws(() => completeSale({ ...emptyState(), products: catalog }, { ...cashInput, items: [cart[1]] }), /tidak tersedia/);
+  const empty = reconcileCart(cart, []);
+  assert.deepEqual(empty.items, []);
+  assert.deepEqual(empty.removed, cart);
+  assert.equal(getCartTotal(empty.items, 0, false, []).total, 0);
+  assert.throws(() => completeSale({ ...emptyState(), products: [] }, { ...cashInput, items: empty.items }), /Keranjang tidak boleh kosong/);
+});
+
+test("unchanged cart references survive reconciliation while display pricing stays live", () => {
+  const cart = freezeDeep([{ productId: "kopi-susu", quantity: 2, note: "unchanged" }]);
+  const catalog = products.map(product => product.id === "kopi-susu" ? { ...product, price: 31000 } : product);
+  const result = reconcileCart(cart, catalog);
+  assert.strictEqual(result.items, cart);
+  assert.deepEqual(result.removed, []);
+  assert.equal(getCartTotal(result.items, 0, false, catalog).subtotal, 62000);
+  assert.strictEqual(reconcileCart(result.items, catalog).items, cart);
+});
+
+test("receipts, history, CSV and historical profit survive menu edits and deletion", () => {
+  const { state, sale } = completeSale(emptyState(), {
+    ...cashInput, items: [{ productId: "kopi-susu", quantity: 2, note: "less sugar" }], cashReceived: 100000, discount: 1000, taxEnabled: true,
+  });
+  const receiptBefore = getSaleLines(sale);
+  const moneyBefore = getSalesFinancials(state.sales);
+  assert.deepEqual(moneyBefore, { revenue: 53900, cost: 18080, grossProfit: 35820, missingCostLines: 0 });
+  const edited: BusinessState = {
+    ...state,
+    products: products.map(product => product.id === "kopi-susu" ? { ...product, name: "New Coffee", price: 47000, cost: 17000, recipe: [] } : product),
+  };
+  assert.deepEqual(getSaleLines(sale, edited.products), receiptBefore);
+  assert.deepEqual(getSalesFinancials(edited.sales), moneyBefore);
+  assert.equal(getCartTotal(oneCoffee, 0, false, edited.products).subtotal, 47000);
+  const next = completeSale(edited, cashInput);
+  assert.equal(next.sale.items[0].name, "New Coffee");
+  assert.equal(next.sale.items[0].unitPrice, 47000);
+  assert.equal(next.sale.items[0].unitCost, 17000);
+  const deleted = deleteProduct(edited, "kopi-susu");
+  const reopened: BusinessState = freezeDeep(JSON.parse(JSON.stringify(deleted)));
+  assert.deepEqual(getSaleLines(reopened.sales[0], reopened.products), receiptBefore);
+  assert.deepEqual(getSalesFinancials(reopened.sales), moneyBefore);
+  assert.equal(getSaleItemName(reopened.sales[0].items[0], reopened.products), "Es Kopi Susu");
+  assert.equal(readCsv(exportSalesCsv(reopened))[1][3], "2× Es Kopi Susu (less sugar)");
+  assert.deepEqual(getProductSales(reopened.sales, reopened.products).map(({ id, name, count, revenue }) => ({ id, name, count, revenue })), [
+    { id: "kopi-susu", name: "Es Kopi Susu", count: 2, revenue: 50000 },
+  ]);
+});
+
+test("ingredient purchases change future HPP without rewriting earlier profit", () => {
+  const first = completeSale(emptyState(), cashInput);
+  const before = getSalesFinancials(first.state.sales);
+  const purchased = recordPurchase(first.state, { itemId: "milk", quantity: 1000, total: 44000 });
+  const currentCoffee = purchased.products!.find(product => product.id === "kopi-susu")!;
+  assert.notEqual(currentCoffee.cost, first.sale.items[0].unitCost);
+  assert.deepEqual(getSalesFinancials(purchased.sales), before);
+  const second = completeSale(purchased, cashInput);
+  assert.equal(second.sale.items[0].unitCost, currentCoffee.cost);
+  assert.equal(second.state.sales[0].items[0].unitCost, 9040);
+});
+
+test("new sales capture authoritative catalog snapshots, not incoming cart metadata", () => {
+  const items: SaleItem[] = [{ productId: "kopi-susu", quantity: 1, name: "Forged", unitPrice: 1, unitCost: 0 }];
+  const { sale } = completeSale(emptyState(), { ...cashInput, items });
+  assert.deepEqual(sale.items[0], { productId: "kopi-susu", quantity: 1, name: "Es Kopi Susu", unitPrice: 25000, unitCost: 9040 });
+  assert.equal(items[0].name, "Forged");
+  assert.equal(getCartTotal(items).total, 25000);
+});
+
+test("deterministic demo sample transactions all contain known sale-time snapshots", () => {
+  for (const sale of seed.sales) for (const item of sale.items) {
+    const product = products.find(product => product.id === item.productId)!;
+    assert.equal(item.name, product.name);
+    assert.equal(item.unitPrice, product.price);
+    assert.equal(item.unitCost, product.cost);
+  }
+  const before = getSalesFinancials(seed.sales);
+  const withoutCatalog: BusinessState = { ...seed, products: [] };
+  assert.deepEqual(getSalesFinancials(withoutCatalog.sales), before);
+  assert.equal(before.missingCostLines, 0);
+  assert.ok(before.cost! > 0);
+  assert.deepEqual(getSaleLines(seed.sales[0], []), getSaleLines(seed.sales[0], products));
+});
+
+test("cloud sale-line mapping preserves SQL monetary snapshots, including zero", () => {
+  const row = freezeDeep({ product_code: "archived", name: "Sale-time name", quantity: 2, note: "keep", unit_price: "27000", unit_cost: "8123" });
+  const item = mapSaleItem(row);
+  assert.deepEqual(item, { productId: "archived", name: "Sale-time name", quantity: 2, note: "keep", unitPrice: 27000, unitCost: 8123 });
+  const sale: Sale = { ...seed.sales[0], items: [item], subtotal: 54000, discount: 0, tax: 0, total: 54000 };
+  assert.equal(getSaleLines(sale, [])[0].lineTotal, 54000);
+  assert.deepEqual(getSalesFinancials([sale]), { revenue: 54000, cost: 16246, grossProfit: 37754, missingCostLines: 0 });
+  assert.deepEqual(mapSaleItem({ ...row, unit_price: 0, unit_cost: "0", note: null }), {
+    productId: "archived", name: "Sale-time name", quantity: 2, unitPrice: 0, unitCost: 0,
+  });
+  for (const value of [null, "", " ", "NaN", "Infinity", -1]) {
+    const unknown = mapSaleItem({ ...row, unit_price: value, unit_cost: value });
+    assert.equal(unknown.unitPrice, undefined);
+    assert.equal(unknown.unitCost, undefined);
+  }
+});
+
+test("legacy persisted sales remain readable without inventing historical costs", () => {
+  const { sale } = completeSale(emptyState(), { ...cashInput, items: [{ productId: "kopi-susu", quantity: 2 }], cashReceived: 100000, discount: 1000, taxEnabled: true });
+  const legacy: BusinessState = freezeDeep(JSON.parse(JSON.stringify({ ...emptyState(), sales: [{ ...sale, items: [{ productId: "kopi-susu", quantity: 2, note: "old note" }] }] })));
+  const before = JSON.stringify(legacy);
+  const lines = getSaleLines(legacy.sales[0]);
+  assert.equal(lines[0].unitPrice, 25000, "derive from original subtotal, never discounted/taxed total");
+  assert.equal(lines[0].lineTotal, 50000);
+  assert.equal(lines[0].priceSource, "subtotal");
+  assert.match(lines[0].name, /nama saat ini; arsip lama/);
+  assert.equal(lines[0].note, "old note");
+  assert.deepEqual(getSalesFinancials(legacy.sales), { revenue: 53900, cost: null, grossProfit: null, missingCostLines: 1 });
+  const deleted = deleteProduct(legacy, "kopi-susu");
+  assert.equal(getSaleLines(deleted.sales[0], deleted.products)[0].lineTotal, 50000);
+  assert.match(getSaleLines(deleted.sales[0], deleted.products)[0].name, /kopi-susu.*nama tidak tersimpan/);
+  assert.deepEqual(getSalesFinancials(deleted.sales), getSalesFinancials(legacy.sales));
+  assert.equal(JSON.stringify(legacy), before, "display fallbacks must not be persisted as snapshots");
+  assert.equal(Object.hasOwn(legacy.sales[0].items[0], "unitCost"), false);
+});
+
+test("ambiguous legacy line prices and mixed historical costs remain unavailable", () => {
+  const sale: Sale = { ...seed.sales[0], subtotal: 69000, discount: 0, tax: 0, total: 69000, items: [
+    { productId: "kopi-susu", quantity: 1, name: "Original Coffee" },
+    { productId: "croissant", quantity: 2 },
+  ] };
+  const lines = getSaleLines(freezeDeep(sale), products);
+  assert.ok(lines.every(line => line.lineTotal === null && line.priceSource === "unavailable"));
+  assert.equal(lines[0].name, "Original Coffee");
+  assert.ok(getProductSales([sale], products).every(product => product.revenue === null));
+  const complete = completeSale(emptyState(), cashInput).sale;
+  const mixed = getSalesFinancials([complete, sale]);
+  assert.equal(mixed.revenue, 94000);
+  assert.equal(mixed.cost, null);
+  assert.equal(mixed.grossProfit, null);
+  assert.equal(mixed.missingCostLines, 2);
+  const partial: Sale = { ...sale, items: [{ ...sale.items[0], unitPrice: 25000, unitCost: 9040 }, sale.items[1]] };
+  assert.equal(getSaleLines(partial)[1].unitPrice, 22000);
+  assert.equal(getSaleLines(partial)[1].priceSource, "subtotal");
+  assert.equal(getSalesFinancials([partial]).cost, null);
+  assert.equal(getSalesFinancials([partial]).missingCostLines, 1);
+  assert.equal(getSaleLines({ ...partial, subtotal: 1000 })[1].lineTotal, null, "inconsistent subtotals cannot recover a price");
+});
+
+test("recorded zero cost differs from missing legacy cost, even after persistence", () => {
+  const state: BusinessState = { ...emptyState(), products: [{ ...products[0], price: 0, cost: 0, recipe: [] }] };
+  const { sale } = completeSale(state, { ...cashInput, payment: "QRIS", cashReceived: 0 });
+  const reopened: Sale = JSON.parse(JSON.stringify(sale));
+  assert.equal(getSaleLines(reopened, [])[0].unitPrice, 0);
+  assert.equal(getSaleLines(reopened, [])[0].priceSource, "snapshot");
+  assert.deepEqual(getSalesFinancials([reopened]), { revenue: 0, cost: 0, grossProfit: 0, missingCostLines: 0 });
+  assert.deepEqual(getSalesFinancials([]), { revenue: 0, cost: 0, grossProfit: 0, missingCostLines: 0 });
+  for (const value of [undefined, null, NaN, Infinity, -1]) {
+    const invalid: Sale = { ...sale, items: [{ ...sale.items[0], unitCost: value as number | undefined }] };
+    assert.equal(getSalesFinancials([invalid]).cost, null);
+    assert.equal(getSalesFinancials([invalid]).grossProfit, null);
+  }
+});
+
+test("duplicate historical product lines keep individual notes and immutable prices", () => {
+  const { sale } = completeSale(emptyState(), { ...cashInput, cashReceived: 100000, items: [
+    { productId: "kopi-susu", quantity: 1, note: "less sugar" },
+    { productId: "kopi-susu", quantity: 2, note: "tanpa es" },
+  ] });
+  const lines = getSaleLines(sale, []);
+  assert.deepEqual(lines.map(line => [line.note, line.lineTotal]), [["less sugar", 25000], ["tanpa es", 50000]]);
+  assert.equal(getSalesFinancials([sale]).cost, 27120);
+  assert.equal(getProductSales([sale], [])[0].revenue, 75000);
 });
 
 test("deleteInventoryItem removes the item and returns a new state", () => {

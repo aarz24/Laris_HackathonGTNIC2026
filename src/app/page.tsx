@@ -14,5 +14,5 @@ export default async function Home() {
   const email = typeof claims.claims.email === "string" ? claims.claims.email : "";
   const snapshot = await loadSnapshot(supabase);
   if (!snapshot) redirect("/onboarding");
-  return <LarisApp mode="cloud" initialState={snapshot.state} today={snapshot.today} user={{ email, role: snapshot.role }} />;
+  return <LarisApp mode="cloud" initialState={snapshot.state} today={snapshot.today} workspaceId={snapshot.businessId} user={{ id: claims.claims.sub, email, role: snapshot.role }} />;
 }

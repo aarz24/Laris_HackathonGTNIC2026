@@ -1,7 +1,9 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { generateText, Output } from "ai";
 import { z } from "zod";
-import { aiErrorResponse, catalogContext, getGoogleModel, logAiTelemetry, requireAiContext, type AiContext } from "@/lib/ai";
+import { aiErrorResponse, catalogContext, getGoogleModel, logAiTelemetry, requireAiContext, withAiDeadline, type AiContext } from "@/lib/ai";
+import { aiFailureReason, generationOptions, waitForSignal } from "@/lib/ai-request";
+import { receiptFailure } from "@/lib/ai-fallbacks";
 import type { InventoryItem } from "@/lib/laris-data";
 import { aiRateLimit } from "@/lib/rate-limit";
 
@@ -53,6 +55,10 @@ function validReceiptDate(value: string | undefined) {
 }
 
 export async function POST(request: NextRequest) {
+  return withAiDeadline(request, routeSignal => handleRequest(request, routeSignal));
+}
+
+async function handleRequest(request: NextRequest, routeSignal: AbortSignal) {
   const start = Date.now();
   const contentLength = Number(request.headers.get("content-length") ?? 0);
   if (contentLength > MAX_BODY_BYTES) return NextResponse.json({ error: "Ukuran permintaan maksimal 12 MB." }, { status: 413 });
@@ -63,13 +69,13 @@ export async function POST(request: NextRequest) {
   try {
     const contentType = request.headers.get("content-type") ?? "";
     if (contentType.includes("multipart/form-data")) {
-      const formData = await request.formData();
+      const formData = await waitForSignal(routeSignal, () => request.formData());
       rawMode = formData.get("mode");
       const file = formData.get("file");
       if (file instanceof File) {
         if (file.size > MAX_IMAGE_BYTES) return NextResponse.json({ error: "Ukuran foto maksimal 8 MB." }, { status: 413 });
         if (!imageMimes.includes(file.type as typeof imageMimes[number])) return NextResponse.json({ error: "Gunakan foto nota berformat JPG, PNG, atau WebP." }, { status: 415 });
-        const buffer = Buffer.from(await file.arrayBuffer());
+        const buffer = Buffer.from(await waitForSignal(routeSignal, () => file.arrayBuffer()));
         imageBase64 = buffer.toString("base64");
         mimeType = file.type;
       }
@@ -78,13 +84,14 @@ export async function POST(request: NextRequest) {
         mode: modeSchema,
         image: z.string().max(MAX_BODY_BYTES),
         mimeType: z.enum(imageMimes).optional(),
-      }).parse(await request.json());
+      }).parse(await waitForSignal(routeSignal, () => request.json()));
       rawMode = body.mode;
       const match = body.image.match(/^data:([^;]+);base64,/);
       imageBase64 = body.image.replace(/^data:[^;]+;base64,/, "");
       mimeType = match?.[1] ?? body.mimeType ?? "";
     }
   } catch {
+    routeSignal.throwIfAborted();
     return NextResponse.json({ error: "Permintaan tidak valid. Periksa mode dan file gambar." }, { status: 400 });
   }
 
@@ -96,14 +103,15 @@ export async function POST(request: NextRequest) {
   if (!imageBytes) return NextResponse.json({ error: "Gambar kosong atau tidak valid." }, { status: 400 });
   if (imageBytes > MAX_IMAGE_BYTES) return NextResponse.json({ error: "Ukuran foto maksimal 8 MB." }, { status: 413 });
 
-  const limited = await aiRateLimit(request, "scan-receipt", parsedMode.data);
+  const limited = await waitForSignal(routeSignal, () => aiRateLimit(request, "scan-receipt", parsedMode.data));
   if (limited) return limited;
 
   let context: AiContext;
   try {
-    context = await requireAiContext(parsedMode.data, true);
+    context = await waitForSignal(routeSignal, () => requireAiContext(parsedMode.data, true));
+    routeSignal.throwIfAborted();
   } catch (error) {
-    return aiErrorResponse(error, "Workspace belum dapat dimuat. Coba lagi.");
+    return aiErrorResponse(error, "Workspace belum dapat dimuat. Coba lagi.", routeSignal);
   }
   const ingredients = context.state.inventory ?? [];
   if (!ingredients.length) return NextResponse.json({ error: "Tambahkan bahan baku sebelum memindai nota pembelian." }, { status: 422 });
@@ -112,7 +120,10 @@ export async function POST(request: NextRequest) {
   const googleSetup = context.allowGemini ? getGoogleModel() : null;
 
   if (!googleSetup) {
-    if (context.mode === "cloud") return NextResponse.json({ error: "Pemindaian nota cloud membutuhkan GOOGLE_GENERATIVE_AI_API_KEY. Pembelian manual tetap tersedia." }, { status: 503 });
+    if (context.mode === "cloud") {
+      const failure = receiptFailure("unavailable");
+      return NextResponse.json(failure.body, { status: failure.status });
+    }
     const sampleItem = inventoryMap.get("milk") ?? ingredients[0];
     const quantity = ["g", "ml"].includes(sampleItem.unit.toLowerCase()) ? 1000 : 1;
     const newCost = Math.max(1, Math.round((sampleItem.cost || 10) * 1.08 * 100) / 100);
@@ -139,7 +150,8 @@ export async function POST(request: NextRequest) {
   }
 
   try {
-    const result = await generateText({
+    const result = await waitForSignal(routeSignal, () => generateText({
+      ...generationOptions(routeSignal),
       model: googleSetup.model,
       output: Output.object({ schema: receiptSchema }),
       instructions: `Kamu adalah asisten pembelian untuk ${context.state.business.name}.
@@ -157,7 +169,7 @@ Pertahankan angka seperti pada nota dan jangan mengarang baris yang tidak terlih
           { type: "text", text: `Baca nota ini dan petakan ke bahan baku resmi ${context.state.business.name}.` },
         ],
       }],
-    });
+    }));
 
     const parsed = result.output;
     const processedLines: Array<Record<string, unknown>> = [];
@@ -187,7 +199,8 @@ Pertahankan angka seperti pada nota dan jangan mengarang baris yang tidak terlih
     }
 
     await logAiTelemetry({
-      businessId: context.businessId,
+      context,
+      signal: routeSignal,
       feature: "scan-receipt",
       model: googleSetup.modelId,
       input: { imageMime: mimeType, imageBytes },
@@ -196,7 +209,7 @@ Pertahankan angka seperti pada nota dan jangan mengarang baris yang tidak terlih
       ok: true,
     });
     return NextResponse.json({
-      supplierName: parsed.supplierName || "Supplier",
+      supplierName: parsed.supplierName,
       receiptDate: validReceiptDate(parsed.receiptDate),
       lines: processedLines,
       skippedLines,
@@ -207,7 +220,8 @@ Pertahankan angka seperti pada nota dan jangan mengarang baris yang tidak terlih
     });
   } catch (error) {
     await logAiTelemetry({
-      businessId: context.businessId,
+      context,
+      signal: routeSignal,
       feature: "scan-receipt",
       model: googleSetup.modelId,
       input: { imageMime: mimeType, imageBytes },
@@ -215,6 +229,9 @@ Pertahankan angka seperti pada nota dan jangan mengarang baris yang tidak terlih
       latencyMs: Date.now() - start,
       ok: false,
     });
-    return NextResponse.json({ error: "Gagal memproses gambar nota. Pastikan gambar cukup terang dan terbaca, lalu coba lagi." }, { status: 502 });
+    const reason = aiFailureReason(error, routeSignal);
+    if (reason === "cancelled") return aiErrorResponse(error, "Permintaan dibatalkan.", routeSignal);
+    const failure = receiptFailure(reason);
+    return NextResponse.json(failure.body, { status: failure.status });
   }
 }

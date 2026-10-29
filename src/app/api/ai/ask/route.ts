@@ -1,8 +1,10 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { generateText, isStepCount, tool } from "ai";
 import { z } from "zod";
-import { aiErrorResponse, catalogContext, getGoogleModel, logAiTelemetry, requireAiContext, type AiContext } from "@/lib/ai";
-import { currency, getStock, type BusinessState, type Sale } from "@/lib/laris-data";
+import { aiErrorResponse, catalogContext, getGoogleModel, logAiTelemetry, requireAiContext, withAiDeadline, type AiContext } from "@/lib/ai";
+import { aiFailureReason, generationOptions, waitForSignal } from "@/lib/ai-request";
+import { askFallback, localAnswer } from "@/lib/ai-fallbacks";
+import { currency, getStock, getSalesFinancials, getProductSales, type BusinessState, type Sale } from "@/lib/laris-data";
 import { aiRateLimit } from "@/lib/rate-limit";
 
 export const dynamic = "force-dynamic";
@@ -25,78 +27,44 @@ function salesInPeriod(sales: Sale[], today: string, days: number) {
   });
 }
 
-function estimatedCosts(sales: Sale[], state: BusinessState) {
-  const catalog = state.products ?? [];
-  return sales.reduce((total, sale) => total + sale.items.reduce((cost, item) => {
-    const product = catalog.find((entry) => entry.id === item.productId);
-    return cost + (product?.cost ?? 0) * item.quantity;
-  }, 0), 0);
-}
-
 function productRanking(state: BusinessState) {
-  const counts = new Map<string, number>();
-  for (const sale of state.sales) for (const item of sale.items) counts.set(item.productId, (counts.get(item.productId) ?? 0) + item.quantity);
-  const catalog = state.products ?? [];
-  return Array.from(counts.entries()).map(([id, quantity]) => ({
-    productId: id,
-    name: catalog.find((product) => product.id === id)?.name ?? id,
-    quantitySold: quantity,
-  })).sort((a, b) => b.quantitySold - a.quantitySold);
-}
-
-function localAnswer(question: string, state: BusinessState): string {
-  const q = question.toLowerCase();
-  const ingredients = state.inventory ?? [];
-  const ownerName = state.business.owner || "Pemilik";
-
-  if (/terlaris|paling laris|favorit|menu.*(?:paling|terbanyak)|produk.*(?:paling|terbanyak)/.test(q)) {
-    const ranking = productRanking(state);
-    if (!ranking.length) return "Belum ada penjualan yang bisa dibandingkan. Catat transaksi pertama untuk melihat produk terlaris.";
-    const [first, second] = ranking;
-    return `${first.name} adalah produk terlaris dengan ${first.quantitySold} item terjual.${second ? ` Berikutnya ${second.name} dengan ${second.quantitySold} item.` : ""} Gunakan laporan penjualan untuk memilih periode sebelum mengambil keputusan promo.`;
-  }
-
-  if (/stok|bahan|habis|menipis|belanja|restock/.test(q)) {
-    if (!ingredients.length) return "Belum ada bahan baku di workspace. Tambahkan bahan dan batas minimum stok agar rekomendasi belanja bisa dihitung.";
-    const lowStock = ingredients.filter((item) => getStock(state, item.id) <= item.reorderPoint);
-    if (!lowStock.length) return `Semua ${ingredients.length} bahan masih di atas batas minimum. Belum ada yang perlu dibeli berdasarkan aturan stok saat ini.`;
-    return `Ada ${lowStock.length} bahan yang perlu diperhatikan: ${lowStock.map((item) => `${item.name} tersisa ${getStock(state, item.id).toLocaleString("id-ID")} ${item.unit}`).join(", ")}. Prioritaskan pembelian bahan tersebut.`;
-  }
-
-  if (/omzet|penjualan|laku|untung|margin|laba|pendapatan/.test(q)) {
-    if (!state.sales.length) return `Belum ada transaksi tercatat di ${state.business.name}. Omzet dan laba akan muncul setelah transaksi pertama disimpan.`;
-    const revenue = state.sales.reduce((total, sale) => total + sale.total, 0);
-    const costs = estimatedCosts(state.sales, state);
-    const gross = revenue - costs;
-    const margin = revenue ? (gross / revenue) * 100 : 0;
-    return `Dari ${state.sales.length} transaksi tercatat, omzet ${currency(revenue)} dengan estimasi HPP ${currency(costs)} berdasarkan resep saat ini. Laba kotor ${currency(gross)} (${margin.toFixed(1)}%), sebelum biaya operasional.`;
-  }
-
-  return `Halo ${ownerName}! Saya bisa membantu membaca omzet, produk terlaris, stok yang menipis, pelanggan, dan estimasi laba dari data ${state.business.name}. Tanyakan salah satu topik tersebut.`;
+  return getProductSales(state.sales, state.products ?? []).map((product) => ({
+    productId: product.id,
+    name: product.name,
+    quantitySold: product.count,
+  }));
 }
 
 export async function POST(request: NextRequest) {
+  return withAiDeadline(request, routeSignal => handleRequest(request, routeSignal));
+}
+
+async function handleRequest(request: NextRequest, routeSignal: AbortSignal) {
   const start = Date.now();
   let input: z.infer<typeof requestSchema>;
   try {
-    input = requestSchema.parse(await request.json());
+    input = requestSchema.parse(await waitForSignal(routeSignal, () => request.json()));
   } catch {
+    routeSignal.throwIfAborted();
     return NextResponse.json({ error: "Pertanyaan tidak valid. Gunakan teks 1–2000 karakter dan riwayat percakapan yang sesuai." }, { status: 400 });
   }
 
-  const limited = await aiRateLimit(request, "ask", input.mode);
+  const limited = await waitForSignal(routeSignal, () => aiRateLimit(request, "ask", input.mode));
   if (limited) return limited;
 
   let context: AiContext;
   try {
-    context = await requireAiContext(input.mode);
+    context = await waitForSignal(routeSignal, () => requireAiContext(input.mode));
+    routeSignal.throwIfAborted();
   } catch (error) {
-    return aiErrorResponse(error, "Data workspace belum dapat dimuat. Coba lagi.");
+    return aiErrorResponse(error, "Data workspace belum dapat dimuat. Coba lagi.", routeSignal);
   }
   const { state } = context;
   // Gemini only for authenticated cloud requests; local/demo mode always uses the rule-based answer.
   const googleSetup = context.allowGemini ? getGoogleModel() : null;
-  if (!googleSetup) return NextResponse.json({ answer: localAnswer(input.question, state), source: "local-rules" });
+  if (!googleSetup) return NextResponse.json(context.allowGemini
+    ? askFallback(input.question, state, "unavailable")
+    : { answer: localAnswer(input.question, state), source: "local-rules", notice: "Jawaban aturan lokal, bukan hasil model AI." });
 
   const periodSales = (days: number) => salesInPeriod(state.sales, context.today, days);
   try {
@@ -119,21 +87,21 @@ export async function POST(request: NextRequest) {
         },
       }),
       getProfitSummary: tool({
-        description: "Menghitung estimasi laba kotor dari omzet dan HPP resep saat ini, sebelum biaya operasional",
+        description: "Menghitung laba kotor dari omzet dan HPP saat penjualan, atau menandai HPP historis yang tidak tersedia",
         inputSchema: z.object({ days: z.number().int().min(1).max(90).default(7) }),
         execute: async ({ days }) => {
           const sales = periodSales(days);
-          const revenue = sales.reduce((sum, sale) => sum + sale.total, 0);
-          const costs = estimatedCosts(sales, state);
-          const grossProfit = revenue - costs;
+          const { revenue, cost, grossProfit, missingCostLines } = getSalesFinancials(sales);
           return {
             periodDays: days,
             revenue,
-            estimatedCogs: costs,
+            cogs: cost,
+            costBasis: cost === null ? "unavailable" : "sale-time snapshots",
+            missingCostLines,
             grossProfit,
-            grossProfitFormatted: currency(grossProfit),
-            marginPercent: revenue ? Math.round((grossProfit / revenue) * 1000) / 10 : 0,
-            note: "HPP memakai resep dan biaya bahan saat ini; laba kotor belum dikurangi biaya operasional.",
+            grossProfitFormatted: grossProfit === null ? "Tidak tersedia" : currency(grossProfit),
+            marginPercent: grossProfit === null ? null : revenue ? Math.round((grossProfit / revenue) * 1000) / 10 : 0,
+            note: cost === null ? "HPP arsip lama tidak tersedia. Jangan menganggap biaya nol atau menggantinya dengan HPP saat ini; laba dan margin tidak dapat dihitung." : "HPP memakai biaya saat penjualan; laba kotor belum dikurangi biaya operasional.",
           };
         },
       }),
@@ -178,7 +146,8 @@ export async function POST(request: NextRequest) {
       }),
     };
 
-    const result = await generateText({
+    const result = await waitForSignal(routeSignal, () => generateText({
+      ...generationOptions(routeSignal),
       model: googleSetup.model,
       tools,
       stopWhen: isStepCount(4),
@@ -188,17 +157,18 @@ Jawab dalam Bahasa Indonesia yang hangat, ringkas, dan profesional. Gunakan form
 ${catalogContext(state)}
 
 Gunakan tools untuk membaca data workspace. Jangan menebak angka, transaksi, produk, atau stok.
-Jika data kosong, katakan dengan jujur dan sarankan langkah berikutnya. Jelaskan bahwa laba kotor adalah estimasi sebelum biaya operasional.
+Jika data kosong, katakan dengan jujur dan sarankan langkah berikutnya. Laba kotor memakai HPP saat penjualan, sebelum biaya operasional. Jika HPP historis tidak tersedia, jangan menebak biaya, laba, atau margin; jelaskan keterbatasan arsip lama.
 Berikan rekomendasi praktis hanya berdasarkan data yang tersedia.`,
       messages: [
         ...input.history.map((message) => ({ role: message.role, content: message.text })),
         { role: "user" as const, content: input.question },
       ],
-    });
+    }));
     if (!result.text.trim()) throw new Error("Model tidak menghasilkan jawaban.");
 
     await logAiTelemetry({
-      businessId: context.businessId,
+      context,
+      signal: routeSignal,
       feature: "ask",
       model: googleSetup.modelId,
       input: { questionLength: input.question.length },
@@ -209,7 +179,8 @@ Berikan rekomendasi praktis hanya berdasarkan data yang tersedia.`,
     return NextResponse.json({ answer: result.text, source: "gemini", model: googleSetup.modelId });
   } catch (error) {
     await logAiTelemetry({
-      businessId: context.businessId,
+      context,
+      signal: routeSignal,
       feature: "ask",
       model: googleSetup.modelId,
       input: { questionLength: input.question.length },
@@ -217,6 +188,8 @@ Berikan rekomendasi praktis hanya berdasarkan data yang tersedia.`,
       latencyMs: Date.now() - start,
       ok: false,
     });
-    return NextResponse.json({ error: "Asisten AI belum dapat menjawab. Coba lagi atau gunakan laporan di workspace." }, { status: 502 });
+    const reason = aiFailureReason(error, routeSignal);
+    if (reason === "cancelled") return aiErrorResponse(error, "Permintaan dibatalkan.", routeSignal);
+    return NextResponse.json(askFallback(input.question, context.state, reason));
   }
 }

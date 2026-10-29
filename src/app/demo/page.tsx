@@ -7,5 +7,5 @@ export const metadata: Metadata = {
 };
 
 export default function DemoPage() {
-  return <LarisApp mode="local" notice="Demo dengan data fiktif. Perubahan hanya tersimpan di browser ini dan bukan akun usaha cloud." />;
+  return <LarisApp mode="local" />;
 }

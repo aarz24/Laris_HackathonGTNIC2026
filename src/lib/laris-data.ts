@@ -39,9 +39,15 @@ export interface CartItem {
   name?: string;
 }
 
+export interface SaleItem extends CartItem {
+  /** Optional only for legacy local records; new sales always capture these values. */
+  readonly unitPrice?: number;
+  readonly unitCost?: number;
+}
+
 export interface Sale {
   id: string;
-  items: CartItem[];
+  items: SaleItem[];
   subtotal: number;
   discount: number;
   tax: number;
@@ -166,7 +172,7 @@ function validateCart(items: CartItem[], catalog: Product[] = products): void {
     if (!item || !Number.isSafeInteger(item.quantity) || item.quantity <= 0) {
       throw new Error("Jumlah menu harus berupa bilangan bulat positif yang aman.");
     }
-    findProduct(item.productId, catalog);
+    if (findProduct(item.productId, catalog).active === false) throw new Error("Menu sedang tidak tersedia.");
     if (item.note !== undefined && typeof item.note !== "string") throw new Error("Catatan menu harus berupa teks.");
   }
 }
@@ -193,6 +199,92 @@ export function getCartTotal(items: CartItem[], discount = 0, taxEnabled = false
   const total = subtotal - roundedDiscount + tax;
   assertAmount(total, "Total");
   return { subtotal, discount: roundedDiscount, tax, total };
+}
+
+/** Reconcile display state only; checkout still validates the original submitted cart. */
+export function reconcileCart(items: CartItem[], catalog: Product[]): { items: CartItem[]; removed: CartItem[] } {
+  const available = new Set(catalog.filter((product) => product.active !== false).map((product) => product.id));
+  const removed = items.filter((item) => !available.has(item.productId));
+  return { items: removed.length ? items.filter((item) => available.has(item.productId)) : items, removed };
+}
+
+function historicalAmount(value: unknown): number | null {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0 && value <= Number.MAX_SAFE_INTEGER ? value : null;
+}
+
+/** SQL order_item snapshots; number strings are supported without treating null as zero. */
+export function mapSaleItem(row: {
+  product_code: string; name: string | null; quantity: number; note: string | null;
+  unit_price: number | string | null; unit_cost: number | string | null;
+}): SaleItem {
+  const amount = (value: number | string | null) => historicalAmount(typeof value === "string" && value.trim() ? Number(value) : value);
+  const unitPrice = amount(row.unit_price);
+  const unitCost = amount(row.unit_cost);
+  return {
+    productId: row.product_code, quantity: row.quantity,
+    ...(row.note ? { note: row.note } : {}), ...(row.name ? { name: row.name } : {}),
+    ...(unitPrice === null ? {} : { unitPrice }), ...(unitCost === null ? {} : { unitCost }),
+  };
+}
+
+function snapshotSaleItems(items: CartItem[], catalog: Product[]): SaleItem[] {
+  return items.map((item) => {
+    const product = findProduct(item.productId, catalog);
+    assertAmount(product.cost, "HPP");
+    return { productId: item.productId, quantity: item.quantity, ...(item.note !== undefined ? { note: item.note } : {}), name: product.name, unitPrice: product.price, unitCost: product.cost };
+  });
+}
+
+export function getSaleItemName(item: SaleItem, catalog: Product[] = products): string {
+  if (item.name) return item.name;
+  const current = catalog.find((product) => product.id === item.productId);
+  return current ? `${current.name} (nama saat ini; arsip lama)` : `${item.productId} (nama tidak tersimpan)`;
+}
+
+/** Never use current prices for receipts. Only one missing line can be recovered from the subtotal. */
+export function getSaleLines(sale: Sale, catalog: Product[] = products) {
+  const missingPrices = sale.items.filter((item) => historicalAmount(item.unitPrice) === null).length;
+  const knownSubtotal = sale.items.reduce((total, item) => total + (historicalAmount(item.unitPrice) ?? 0) * item.quantity, 0);
+  const remainder = historicalAmount(sale.subtotal - knownSubtotal);
+  return sale.items.map((item) => {
+    let unitPrice = historicalAmount(item.unitPrice);
+    let priceSource: "snapshot" | "subtotal" | "unavailable" = unitPrice === null ? "unavailable" : "snapshot";
+    if (unitPrice === null && missingPrices === 1 && remainder !== null && Number.isSafeInteger(item.quantity) && item.quantity > 0) {
+      unitPrice = remainder / item.quantity;
+      priceSource = "subtotal";
+    }
+    return { ...item, name: getSaleItemName(item, catalog), unitPrice, priceSource, lineTotal: unitPrice === null ? null : priceSource === "subtotal" ? remainder : unitPrice * item.quantity };
+  });
+}
+
+/** Missing historical cost makes the aggregate unknown, not a partial sum presented as profit. */
+export function getSalesFinancials(sales: Sale[]) {
+  let knownCost = 0;
+  let missingCostLines = 0;
+  for (const sale of sales) {
+    if (!sale.items.length) missingCostLines++;
+    for (const item of sale.items) {
+      const unitCost = historicalAmount(item.unitCost);
+      if (unitCost === null) missingCostLines++;
+      else knownCost += unitCost * item.quantity;
+    }
+  }
+  const revenue = sales.reduce((total, sale) => total + sale.total, 0);
+  const cost = missingCostLines ? null : historicalAmount(knownCost);
+  return { revenue, cost, grossProfit: cost === null ? null : revenue - cost, missingCostLines };
+}
+
+/** Includes deleted products and uses historical line amounts, before order discounts and tax. */
+export function getProductSales(sales: Sale[], catalog: Product[] = products) {
+  const ranking = new Map<string, { id: string; name: string; image: string; category: string; count: number; revenue: number | null }>();
+  for (const sale of sales) for (const line of getSaleLines(sale, catalog)) {
+    const product = catalog.find((entry) => entry.id === line.productId);
+    const current = ranking.get(line.productId) ?? { id: line.productId, name: line.name, image: product?.image ?? "", category: product?.category ?? "Arsip", count: 0, revenue: 0 };
+    current.count += line.quantity;
+    current.revenue = current.revenue === null || line.lineTotal === null ? null : current.revenue + line.lineTotal;
+    ranking.set(line.productId, current);
+  }
+  return [...ranking.values()].sort((a, b) => b.count - a.count);
 }
 
 export function timestamp(date = DEMO_DATE): string {
@@ -281,7 +373,7 @@ export function completeSale(state: BusinessState, input: {
   const customerName = input.customerName?.trim() || existingCustomer?.name || (phone ? "Pelanggan baru" : "Pelanggan umum");
   const createdAt = timestamp();
   const sale: Sale = {
-    id, items: input.items.map((item) => ({ ...item })), ...totals,
+    id, items: snapshotSaleItems(input.items, catalog), ...totals,
     payment: input.payment, cashReceived: input.payment === "Tunai" ? cashReceived : totals.total,
     customerName, channel, createdAt, status: "Lunas",
   };
@@ -410,7 +502,7 @@ export function createInitialState(endDate: string = DEMO_DATE): BusinessState {
       const paymentRoll = random();
       const payment: Sale["payment"] = paymentRoll < 0.66 ? "QRIS" : paymentRoll < 0.92 ? "Tunai" : "Transfer";
       const sale: Sale = {
-        id: `sale-${date}-${String(index + 1).padStart(3, "0")}`, items, ...totals, payment,
+        id: `sale-${date}-${String(index + 1).padStart(3, "0")}`, items: snapshotSaleItems(items, products), ...totals, payment,
         cashReceived: payment === "Tunai" ? Math.ceil(totals.total / 50000) * 50000 : totals.total,
         customerName: customer?.name ?? "Pelanggan umum", channel: random() < 0.18 ? "Etalase" : "Kasir", createdAt, status: "Lunas",
       };
@@ -526,7 +618,7 @@ export function exportSalesCsv(state: BusinessState): string {
   for (const sale of state.sales) {
     rows.push([
       sale.id, sale.createdAt, sale.customerName,
-      sale.items.map((item) => `${item.quantity}× ${(state.products ?? products).find((product) => product.id === item.productId)?.name ?? item.productId}${item.note ? ` (${item.note})` : ""}`).join("; "),
+      sale.items.map((item) => `${item.quantity}× ${getSaleItemName(item, state.products ?? products)}${item.note ? ` (${item.note})` : ""}`).join("; "),
       sale.subtotal, sale.discount, sale.tax, sale.total, sale.payment, sale.cashReceived, sale.channel, sale.status,
     ]);
   }

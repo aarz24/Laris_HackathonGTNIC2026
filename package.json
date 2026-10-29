@@ -8,7 +8,7 @@
     "start": "next start",
     "lint": "eslint",
     "typecheck": "tsc --noEmit",
-    "test": "node --test --experimental-strip-types src/lib/laris-data.test.ts",
+    "test": "node --test --experimental-strip-types src/lib/laris-data.test.ts src/lib/laris-guide.test.ts src/lib/ai-reliability.test.ts",
     "db:seed": "node --experimental-strip-types --env-file=.env scripts/seed.ts",
     "test:rls": "node --test --experimental-strip-types --env-file=.env scripts/rls.test.ts",
     "eval:voice": "node --experimental-strip-types --env-file=.env scripts/eval-voice.ts"

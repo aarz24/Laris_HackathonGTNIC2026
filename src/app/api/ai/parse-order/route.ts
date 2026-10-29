@@ -1,7 +1,9 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { generateText, Output } from "ai";
 import { z } from "zod";
-import { aiErrorResponse, catalogContext, getGoogleModel, logAiTelemetry, requireAiContext, type AiContext } from "@/lib/ai";
+import { aiErrorResponse, catalogContext, getGoogleModel, logAiTelemetry, requireAiContext, withAiDeadline, type AiContext } from "@/lib/ai";
+import { aiFailureReason, generationOptions, waitForSignal } from "@/lib/ai-request";
+import { parseOrderFallback } from "@/lib/ai-fallbacks";
 import { parseOrder } from "@/lib/laris-data";
 import { aiRateLimit } from "@/lib/rate-limit";
 
@@ -30,14 +32,19 @@ const orderSchema = z.object({
 });
 
 export async function POST(request: NextRequest) {
+  return withAiDeadline(request, routeSignal => handleRequest(request, routeSignal));
+}
+
+async function handleRequest(request: NextRequest, routeSignal: AbortSignal) {
   const start = Date.now();
   const contentLength = Number(request.headers.get("content-length") ?? 0);
   if (contentLength > MAX_BODY_BYTES) return NextResponse.json({ error: "Ukuran permintaan maksimal 12 MB." }, { status: 413 });
 
   let input: z.infer<typeof requestSchema>;
   try {
-    input = requestSchema.parse(await request.json());
+    input = requestSchema.parse(await waitForSignal(routeSignal, () => request.json()));
   } catch {
+    routeSignal.throwIfAborted();
     return NextResponse.json({ error: "Permintaan tidak valid. Periksa mode, teks, dan format audio." }, { status: 400 });
   }
   const text = input.text;
@@ -50,14 +57,15 @@ export async function POST(request: NextRequest) {
     if (audioBytes > MAX_AUDIO_BYTES) return NextResponse.json({ error: "Ukuran audio maksimal 8 MB." }, { status: 413 });
   }
 
-  const limited = await aiRateLimit(request, "parse-order", input.mode);
+  const limited = await waitForSignal(routeSignal, () => aiRateLimit(request, "parse-order", input.mode));
   if (limited) return limited;
 
   let context: AiContext;
   try {
-    context = await requireAiContext(input.mode, true);
+    context = await waitForSignal(routeSignal, () => requireAiContext(input.mode, true));
+    routeSignal.throwIfAborted();
   } catch (error) {
-    return aiErrorResponse(error, "Workspace belum dapat dimuat. Coba lagi.");
+    return aiErrorResponse(error, "Workspace belum dapat dimuat. Coba lagi.", routeSignal);
   }
 
   const catalog = (context.state.products ?? []).filter((product) => product.active !== false);
@@ -67,6 +75,10 @@ export async function POST(request: NextRequest) {
   const googleSetup = context.allowGemini ? getGoogleModel() : null;
 
   if (!googleSetup) {
+    if (context.allowGemini) {
+      const fallback = parseOrderFallback(text, context.state, "unavailable");
+      return NextResponse.json(fallback.body, { status: fallback.status });
+    }
     if (!text) {
       const message = context.allowGemini
         ? "Pesanan audio membutuhkan konfigurasi Gemini. Gunakan input teks atau isi GOOGLE_GENERATIVE_AI_API_KEY."
@@ -85,7 +97,8 @@ export async function POST(request: NextRequest) {
       text: `Analisis pesanan pelanggan berikut dan petakan hanya ke katalog resmi ${context.state.business.name}:\n${text ? `"${text}"` : "(Dengarkan rekaman audio)"}`,
     });
 
-    const result = await generateText({
+    const result = await waitForSignal(routeSignal, () => generateText({
+      ...generationOptions(routeSignal),
       model: googleSetup.model,
       output: Output.object({ schema: orderSchema }),
       instructions: `Kamu adalah asisten kasir untuk ${context.state.business.name} di Indonesia.
@@ -100,7 +113,7 @@ Aturan ketat:
 4. Jika jumlah tidak disebutkan, gunakan 1. Pahami bilangan Indonesia, sepasang = 2, dan lusin = 12.
 5. Deteksi Tunai, QRIS, atau Transfer. Default Tunai jika tidak disebutkan.`,
       messages: [{ role: "user", content: contentParts }],
-    });
+    }));
 
     const parsed = result.output;
     const verifiedItems: typeof parsed.items = [];
@@ -111,7 +124,8 @@ Aturan ketat:
     }
 
     await logAiTelemetry({
-      businessId: context.businessId,
+      context,
+      signal: routeSignal,
       feature: "parse-order",
       model: googleSetup.modelId,
       input: { textLength: text.length, hasAudio: Boolean(audioBase64) },
@@ -122,7 +136,8 @@ Aturan ketat:
     return NextResponse.json({ items: verifiedItems, payment: parsed.payment, unknown: verifiedUnknown, source: "gemini", model: googleSetup.modelId });
   } catch (error) {
     await logAiTelemetry({
-      businessId: context.businessId,
+      context,
+      signal: routeSignal,
       feature: "parse-order",
       model: googleSetup.modelId,
       input: { textLength: text.length, hasAudio: Boolean(audioBase64) },
@@ -130,8 +145,9 @@ Aturan ketat:
       latencyMs: Date.now() - start,
       ok: false,
     });
-    if (!text) return NextResponse.json({ error: "Pesanan audio belum dapat diproses. Coba lagi atau gunakan input teks." }, { status: 502 });
-    const fallback = parseOrder(text, catalog);
-    return NextResponse.json({ ...fallback, source: "fallback-parser", warning: "Model AI sedang sibuk. Menggunakan pengurai lokal dengan katalog workspace." });
+    const reason = aiFailureReason(error, routeSignal);
+    if (reason === "cancelled") return aiErrorResponse(error, "Permintaan dibatalkan.", routeSignal);
+    const fallback = parseOrderFallback(text, context.state, reason);
+    return NextResponse.json(fallback.body, { status: fallback.status });
   }
 }

@@ -1,7 +1,7 @@
 import "server-only";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { jakartaToday } from "@/lib/env";
-import type { AuditActivity, BusinessState, Customer, Expense, InventoryItem, Product, Purchase, Sale, StockMovement, TeamMember } from "@/lib/laris-data";
+import { mapSaleItem, type AuditActivity, type BusinessState, type Customer, type Expense, type InventoryItem, type Product, type Purchase, type Sale, type StockMovement, type TeamMember } from "@/lib/laris-data";
 
 export type Role = "owner" | "manager" | "kasir" | "dapur";
 export interface Membership { businessId: string; role: Role; userId: string; email: string; displayName: string }
@@ -19,15 +19,15 @@ const paymentLabel = { tunai: "Tunai", qris: "QRIS", transfer: "Transfer" } as c
 
 type OrderRow = {
   id: string; created_at: string; customer_name: string; channel: string; subtotal: number; discount: number; tax: number; total: number; cash_received: number;
-  order_item: { product_code: string; name: string | null; quantity: number; note: string | null }[];
+  order_item: Parameters<typeof mapSaleItem>[0][];
   payment: { method: keyof typeof paymentLabel }[];
 };
-export const ORDER_SELECT = "id, created_at, customer_name, channel, subtotal, discount, tax, total, cash_received, order_item(product_code, name, quantity, note), payment(method)";
+export const ORDER_SELECT = "id, created_at, customer_name, channel, subtotal, discount, tax, total, cash_received, order_item(product_code, name, unit_price, unit_cost, quantity, note), payment(method)";
 
 export function mapSale(row: OrderRow): Sale {
   return {
     id: row.id,
-    items: row.order_item.map((item) => ({ productId: item.product_code, quantity: item.quantity, ...(item.note ? { note: item.note } : {}), ...(item.name ? { name: item.name } : {}) })),
+    items: row.order_item.map(mapSaleItem),
     subtotal: Number(row.subtotal), discount: Number(row.discount), tax: Number(row.tax), total: Number(row.total), cashReceived: Number(row.cash_received),
     payment: paymentLabel[row.payment[0]?.method ?? "tunai"] ?? "Tunai",
     customerName: row.customer_name,
