@@ -14,7 +14,7 @@ import {
 } from "lucide-react";
 import {
   createInitialState, products as demoProducts, inventory as demoInventory, currency, getStock, getCartTotal, completeSale,
-  recordPurchase, parseOrder, exportSalesCsv, timestamp, DEMO_DATE,
+  recordPurchase, exportSalesCsv, timestamp, DEMO_DATE,
   reconcileCart, getSaleLines, getSaleItemName, getSalesFinancials, getProductSales,
   deleteProduct, deleteInventoryItem, deleteCustomer, deleteExpense, updateCustomer,
   type BusinessState, type CartItem, type Sale, type Product, type InventoryItem, type Customer, type Expense, type TeamMember,
@@ -29,8 +29,13 @@ import { signOutAction } from "@/app/login/actions";
 import type { Role } from "@/lib/repo";
 import { aiFailureReason, createRequestSlot, fetchAiJson } from "@/lib/ai-request";
 import { DEMO_STORAGE_KEY, findGuideFeatures, getReceiptActions, getTourFeatures, guideStorageKey, resetDemoSession, type GuideFeature, type ReceiptAction, type ReceiptCustomerLink, type View } from "@/lib/laris-guide";
+import {
+  createVoiceOrderDraft, mergeVoiceOrderDraft, parseVoiceOrder, validateVoiceOrderDraft, validateVoiceOrderResponse,
+  type VoiceDraftValidation, type VoiceOrderDraft, type VoiceOrderResult,
+} from "@/lib/voice-order";
 import { GuidedTour, HelpCenter, WelcomeGuide } from "./laris-help";
 import { AiBadge, EmptyState, LarisMark, PageArt, RevenueChart, Sparkline, Trend } from "./laris-visuals";
+import { VoiceOrderPreview } from "./voice-order-preview";
 
 export interface LarisAppProps {
   mode?: "cloud" | "local";
@@ -56,6 +61,27 @@ const initials = (name: string) => name.split(" ").filter(Boolean).slice(0, 2).m
 const sum = (sales: Sale[]) => sales.reduce((total, sale) => total + sale.total, 0);
 const historicalCurrency = (amount: number | null) => amount === null ? "Tidak tersedia" : currency(amount);
 const productImage = (product: { image: string }) => product.image || "/images/kopi-susu.webp";
+function unavailableCartProducts(items: readonly CartItem[], products: readonly Product[], inventory: readonly InventoryItem[], state: BusinessState) {
+  const unavailable = new Set<string>();
+  const ingredientTotals = new Map<string, number>();
+  const ingredientProducts = new Map<string, Set<string>>();
+  for (const item of items) {
+    const product = products.find(entry => entry.id === item.productId);
+    if (!product || product.active === false || !Number.isInteger(item.quantity) || item.quantity < 1) { unavailable.add(item.productId); continue; }
+    for (const line of product.recipe) {
+      if (!inventory.some(ingredient => ingredient.id === line.itemId)) unavailable.add(product.id);
+      ingredientTotals.set(line.itemId, (ingredientTotals.get(line.itemId) ?? 0) + line.quantity * item.quantity);
+      const consumers = ingredientProducts.get(line.itemId) ?? new Set<string>();
+      consumers.add(product.id); ingredientProducts.set(line.itemId, consumers);
+    }
+  }
+  for (const [itemId, required] of ingredientTotals) {
+    if (!inventory.some(item => item.id === itemId) || getStock(state, itemId) < required) {
+      for (const productId of ingredientProducts.get(itemId) ?? []) unavailable.add(productId);
+    }
+  }
+  return unavailable;
+}
 const PRODUCT_IMAGES = Array.from(new Set(demoProducts.map(product => product.image)));
 const roleLabels = { owner: "Owner", manager: "Manager", kasir: "Kasir", dapur: "Dapur" } as const;
 const roleDetails = { owner: "Semua laporan, tim, dan pengaturan usaha", manager: "Operasional, katalog, stok, dan laporan", kasir: "Transaksi, pembelian, dan pelayanan pelanggan", dapur: "Melihat pesanan, resep, dan persediaan bahan" } as const;
@@ -150,7 +176,9 @@ export default function LarisApp({ mode = "local", initialState, today, workspac
   const [receiptCustomer, setReceiptCustomer] = useState<ReceiptCustomerLink | null>(null);
   const [demoRevision, setDemoRevision] = useState(0);
   const [voiceText, setVoiceText] = useState("");
-  const [parsed, setParsed] = useState<ReturnType<typeof parseOrder> | null>(null);
+  const [parsed, setParsed] = useState<VoiceOrderResult | null>(null);
+  const [voiceDraft, setVoiceDraft] = useState<VoiceOrderDraft | null>(null);
+  const [voiceConsumed, setVoiceConsumed] = useState(false);
   const [voiceNotice, setVoiceNotice] = useState("");
   const [recording, setRecording] = useState(false);
   const [assistantInput, setAssistantInput] = useState("");
@@ -181,9 +209,15 @@ export default function LarisApp({ mode = "local", initialState, today, workspac
   const shellRef = useRef<HTMLDivElement>(null);
   const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const speech = useRef<{ stop: () => void } | null>(null);
+  const voiceRevision = useRef(0);
+  const voiceConsumedGuard = useRef(false);
   const purchaseAttempt = useRef<{ fingerprint: string; key: string } | null>(null);
   const checkoutAttempt = useRef<{ fingerprint: string; key: string } | null>(null);
 
+  const invalidateVoicePreview = useCallback(() => {
+    voiceRevision.current += 1;
+    setParsed(null); setVoiceDraft(null); setVoiceNotice("");
+  }, []);
   const notify = useCallback((text: string) => { setToast(text); if (toastTimer.current) clearTimeout(toastTimer.current); toastTimer.current = setTimeout(() => setToast(""), 4500); }, []);
   const go = useCallback((next: View) => {
     setView(next); setQuery(""); setCategory("Semua menu"); setSegment("Semua"); setTransactionPage(0); setSidebarOpen(false); setError("");
@@ -202,7 +236,7 @@ export default function LarisApp({ mode = "local", initialState, today, workspac
     cancelAiRequests();
     setError(""); setSidebarOpen(false); setModal(next);
   }, [canRecordOperations, cancelAiRequests, notify]);
-  const close = useCallback(() => { cancelAiRequests(); setModal(null); setError(""); setVoiceNotice(""); setScanHikeAlert(null); setPhotoName(""); setMenuImage(null); setCustomerEditor(null); }, [cancelAiRequests]);
+  const close = useCallback(() => { cancelAiRequests(); invalidateVoicePreview(); setModal(null); setError(""); setVoiceNotice(""); setScanHikeAlert(null); setPhotoName(""); setMenuImage(null); setCustomerEditor(null); }, [cancelAiRequests, invalidateVoicePreview]);
   const previewTourPage = useCallback((next: View) => { setView(next); setSidebarOpen(false); }, []);
   const startTour = (features = getTourFeatures(user?.role ?? (mode === "local" ? "owner" : "dapur"), mode)) => {
     close();
@@ -219,7 +253,7 @@ export default function LarisApp({ mode = "local", initialState, today, workspac
   };
   const openGuideFeature = (feature: GuideFeature) => {
     close(); go(feature.view);
-    if (feature.dialog === "voice") { setVoiceText(""); setParsed(null); }
+    if (feature.dialog === "voice") { voiceConsumedGuard.current = false; setVoiceConsumed(false); setVoiceText(""); invalidateVoicePreview(); }
     if (feature.dialog) open(feature.dialog);
   };
   function resetDemo() {
@@ -232,7 +266,7 @@ export default function LarisApp({ mode = "local", initialState, today, workspac
     close();
     setState(result.state); setCart([]); setReceipt(null); setReceiptCustomer(null);
     setDiscount(0); setTaxEnabled(false); setCash(""); setPayment("QRIS"); setCustomerName(""); setCustomerPhone("");
-    setVoiceText(""); setParsed(null); setMessages([]); setAssistantInput("");
+    setVoiceText(""); setParsed(null); setVoiceDraft(null); setVoiceConsumed(false); voiceConsumedGuard.current = false; setMessages([]); setAssistantInput("");
     setSelectedProduct(result.state.products?.[0] ?? demoProducts[0]); setRecipeDraft([]); setInventoryEditor(null);
     setPurchaseItem(result.state.inventory?.[0]?.id ?? ""); setPeriod("today"); setChartPeriod("week");
     setNotificationsRead(false); setSearchQuery(""); setTransactionMethod("Semua"); setTour(null);
@@ -286,9 +320,9 @@ export default function LarisApp({ mode = "local", initialState, today, workspac
   }, [state, ready, notify, mode]);
 
   useEffect(() => {
-    setPendingAi(false); setPendingScan(false);
+    setPendingAi(false); setPendingScan(false); setParsed(null); setVoiceDraft(null); setVoiceConsumed(false); voiceConsumedGuard.current = false; voiceRevision.current += 1;
     return () => {
-      aiRequests.cancel(); scanRequests.cancel();
+      aiRequests.cancel(); scanRequests.cancel(); voiceRevision.current += 1; voiceConsumedGuard.current = true;
       const recognition = speech.current; speech.current = null; recognition?.stop();
     };
   }, [aiRequests, scanRequests, mode, workspaceId, user?.id]);
@@ -400,6 +434,12 @@ export default function LarisApp({ mode = "local", initialState, today, workspac
   const chartPrevious = chartDates.map(date => { const offset = Math.round((new Date(date).getTime() - new Date(activeToday).getTime()) / 86400000); return sum(state.sales.filter(sale => sale.createdAt.slice(0, 10) >= day(offset - (chartPeriod === "week" ? 7 : 35)) && sale.createdAt.slice(0, 10) <= day(offset - (chartPeriod === "week" ? 7 : 35) + (chartPeriod === "week" ? 0 : 4)))); });
   const filteredProducts = products.filter(product => product.active !== false && (category === "Semua menu" || product.category === category) && product.name.toLowerCase().includes(query.toLowerCase()));
   const voiceSample = products.length ? `dua ${products[0].name}${products[1] ? `, satu ${products[1].name}` : ""}, bayar QRIS` : "";
+  const voiceDraftValidation = useMemo<VoiceDraftValidation | null>(() => parsed && voiceDraft ? validateVoiceOrderDraft(parsed.review, voiceDraft, products) : null, [parsed, voiceDraft, products]);
+  const voiceMergeValidation = useMemo<VoiceDraftValidation | null>(() => parsed && voiceDraft ? mergeVoiceOrderDraft(parsed.review, voiceDraft, cart, products) : null, [parsed, voiceDraft, cart, products]);
+  const voiceStockItems = useMemo<CartItem[]>(() => [...cart, ...(voiceDraft?.rows.filter(row => !row.removed && row.productId && Number.isInteger(row.quantity) && (row.quantity ?? 0) > 0).map(row => ({ productId: row.productId!, quantity: row.quantity!, ...(row.note.trim() ? { note: row.note.trim() } : {}) })) ?? [])], [cart, voiceDraft]);
+  const voiceUnavailableProductIds = useMemo(() => unavailableCartProducts(voiceStockItems, products, inventory, state), [voiceStockItems, products, inventory, state]);
+  const voiceConfirmDisabled = !parsed || !voiceDraft || !voiceDraftValidation?.ok || !voiceMergeValidation?.ok || voiceUnavailableProductIds.size > 0 || !canRecordOperations || pendingAi || recording || voiceConsumed;
+  const voiceDisabledReason = voiceConsumed ? "Pesanan ini sudah ditambahkan ke keranjang." : !canRecordOperations ? "Akses pencatatan pesanan sudah tidak tersedia." : pendingAi || recording ? "Tunggu rekaman dan pembacaan pesanan selesai." : voiceUnavailableProductIds.size > 0 ? "Stok bahan untuk pesanan ini belum cukup." : "Selesaikan semua baris dan metode pembayaran sebelum memasukkan pesanan.";
   const purchaseInventoryItem = inventory.find(item => item.id === purchaseItem) ?? inventory[0] ?? null;
 
   function addProduct(product: Product) {
@@ -518,50 +558,85 @@ export default function LarisApp({ mode = "local", initialState, today, workspac
   async function handleVoiceParse(text: string) {
     if (!text.trim()) return;
     const request = aiRequests.begin();
-    setError(""); setParsed(null); setVoiceNotice("");
+    const revision = ++voiceRevision.current;
+    voiceConsumedGuard.current = false;
+    setVoiceConsumed(false); setError(""); setParsed(null); setVoiceDraft(null); setVoiceNotice("");
     setPendingAi(true);
     try {
       if (mode === "local") {
-        setParsed(parseOrder(text, products.filter(product => product.active !== false)));
-        setVoiceNotice("local-parser · Pengurai teks lokal, bukan hasil model AI. Periksa sebelum konfirmasi.");
+        const result = validateVoiceOrderResponse(parseVoiceOrder(text, products), products);
+        if (!request.canCommit() || revision !== voiceRevision.current) return;
+        setParsed(result); setVoiceDraft(createVoiceOrderDraft(result.review, products));
+        setVoiceNotice("local-parser · Pengurai teks lokal, bukan hasil model AI. Periksa setiap saran sebelum konfirmasi.");
         return;
       }
-      const data = await fetchAiJson<ReturnType<typeof parseOrder> & { source?: string; notice?: string }>("/api/ai/parse-order", {
+      const data = await fetchAiJson<unknown>("/api/ai/parse-order", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ text, mode }),
       }, request.signal);
-      if (!request.canCommit()) return;
-      if (!Array.isArray(data.items) || !Array.isArray(data.unknown) || !["Tunai", "QRIS", "Transfer"].includes(data.payment)) throw new Error("Hasil pesanan tidak valid. Isi pesanan secara manual.");
-      setParsed({ items: data.items, payment: data.payment, unknown: data.unknown });
-      setVoiceNotice(`${data.source ?? "AI"} · ${data.notice ?? "Periksa hasil pesanan sebelum konfirmasi."}`);
+      if (!request.canCommit() || revision !== voiceRevision.current) return;
+      const result = validateVoiceOrderResponse(data, products);
+      setParsed(result); setVoiceDraft(createVoiceOrderDraft(result.review, products));
+      const response = data as { source?: unknown; notice?: unknown };
+      const source = typeof response.source === "string" ? response.source : "AI";
+      const responseNotice = typeof response.notice === "string" ? response.notice : "Periksa setiap saran sebelum konfirmasi.";
+      setVoiceNotice(`${source} · ${responseNotice}`);
     } catch (caught) {
-      if (!request.isCurrent()) return;
+      if (!request.isCurrent() || revision !== voiceRevision.current) return;
       setError(aiFailureReason(caught, request.signal) === "timeout" ? "Batas waktu 20 detik tercapai. Ketik ulang atau pilih menu secara manual." : caught instanceof Error ? caught.message : "Gagal mengurai pesanan.");
     } finally {
       if (request.finish()) setPendingAi(false);
     }
   }
 
+  function replaceVoiceText(text: string, parse = false) {
+    cancelAiRequests(); invalidateVoicePreview(); voiceConsumedGuard.current = false; setVoiceConsumed(false); setError(""); setVoiceText(text);
+    if (parse && text.trim()) void handleVoiceParse(text);
+  }
+
   function startVoice() {
     type SpeechResult = { results: { 0: { 0: { transcript: string } } } };
     type Recognition = { lang: string; interimResults: boolean; onresult: (event: SpeechResult) => void; onerror: () => void; onend: () => void; start: () => void; stop: () => void };
+    cancelAiRequests(); invalidateVoicePreview(); voiceConsumedGuard.current = false; setVoiceConsumed(false); setError("");
     const browser = window as unknown as { SpeechRecognition?: new () => Recognition; webkitSpeechRecognition?: new () => Recognition };
     const Constructor = browser.SpeechRecognition || browser.webkitSpeechRecognition;
     if (!Constructor) { setError("Browser ini belum mendukung input suara. Ketik pesanan di bawah, ya."); return; }
     try {
-      cancelAiRequests();
       const recognition = new Constructor(); recognition.lang = "id-ID"; recognition.interimResults = false;
       recognition.onresult = event => {
         if (speech.current !== recognition) return;
         const transcript = event.results[0][0].transcript;
         setVoiceText(transcript);
-        handleVoiceParse(transcript);
+        void handleVoiceParse(transcript);
       };
-      recognition.onerror = () => { if (speech.current !== recognition) return; setRecording(false); setError("Mikrofon tidak tersedia atau izin belum diberikan. Gunakan input teks."); };
-      recognition.onend = () => { if (speech.current === recognition) setRecording(false); };
+      recognition.onerror = () => { if (speech.current !== recognition) return; speech.current = null; setRecording(false); setError("Mikrofon tidak tersedia atau izin belum diberikan. Gunakan input teks."); };
+      recognition.onend = () => { if (speech.current === recognition) { speech.current = null; setRecording(false); } };
       speech.current = recognition; recognition.start(); setRecording(true);
-    } catch { setError("Input suara tidak tersedia. Silakan ketik pesanan."); }
+    } catch { speech.current = null; setRecording(false); setError("Input suara tidak tersedia. Silakan ketik pesanan."); }
+  }
+
+  function applyVoiceProductNote(productId: string, note: string) {
+    setVoiceDraft(current => current ? { ...current, rows: current.rows.map(row => !row.removed && row.productId === productId ? { ...row, note } : row) } : current);
+  }
+
+  function confirmVoiceOrder() {
+    if (voiceConsumedGuard.current) return;
+    voiceConsumedGuard.current = true; setVoiceConsumed(true);
+    const revision = voiceRevision.current;
+    const reject = (message: string) => {
+      if (revision !== voiceRevision.current) return;
+      voiceConsumedGuard.current = false; setVoiceConsumed(false); setError(message);
+    };
+    if (!parsed || !voiceDraft || !canRecordOperations || pendingAi || recording) { reject("Pesanan belum siap dimasukkan. Selesaikan tinjauan dan periksa aksesmu."); return; }
+    const draftResult = validateVoiceOrderDraft(parsed.review, voiceDraft, products);
+    if (!draftResult.ok) { reject("Masih ada menu, jumlah, catatan, atau pembayaran yang perlu diperbaiki."); return; }
+    const merged = mergeVoiceOrderDraft(parsed.review, voiceDraft, cart, products);
+    if (!merged.ok) { reject(merged.issues.some(issue => issue.code === "note-conflict") ? "Samakan catatan menu yang sama sebelum memasukkan pesanan." : "Pesanan tidak dapat digabungkan. Periksa jumlah dan katalog saat ini."); return; }
+    if (unavailableCartProducts(merged.items, products, inventory, state).size > 0) { reject("Stok bahan berubah dan belum cukup untuk pesanan ini."); return; }
+    if (revision !== voiceRevision.current) return;
+    setCart(merged.items); setPayment(merged.payment); setVoiceText(""); invalidateVoicePreview();
+    go("pos"); close(); notify("Pesanan ditambahkan. Periksa keranjang lalu lanjutkan pembayaran.");
   }
 
   async function handleReceiptScan(file: File) {
@@ -1264,7 +1339,7 @@ export default function LarisApp({ mode = "local", initialState, today, workspac
       </div>
       {notice && <div className="notice amber" style={{ margin: "16px 24px 0" }}><ShieldCheck size={18}/><span>{notice}</span></div>}
       <main id="main-content" className={`main-content ${view === "pos" ? "pos-main" : ""}`}>
-        <div className="page-heading" data-tour="page-heading"><div className="page-title-group"><PageArt view={view}/><div><div className="eyebrow">{view === "overview" ? (activeToday === DEMO_DATE ? "MINGGU, 18 OKTOBER 2026" : new Date(`${activeToday}T12:00:00`).toLocaleDateString("id-ID", { weekday: "long", day: "numeric", month: "long", year: "numeric" }).toUpperCase()) : `${state.business.name.toUpperCase()} · WORKSPACE`}</div><h1 id="page-title" tabIndex={-1}>{view === "overview" ? <>{ready ? greeting(new Date().getHours()) : "Halo"}, {state.business.owner.split(" ")[0]}</> : view === "pos" ? "Kasir" : pageNames[view]}</h1><p>{({ overview: "Penjualan, stok, dan hasil usahamu hari ini.", pos: "Pilih menu, periksa pesanan, lalu catat pembayaran.", transactions: "Riwayat penjualan, metode bayar, dan struk.", products: "Harga jual, resep, dan HPP setiap menu.", inventory: "Sisa stok bahan baku dan batas pesan ulang.", purchases: "Belanja bahan dari pemasok.", customers: "Data pelanggan, kunjungan, dan poin.", storefront: `Etalase ${state.business.name} — pratinjau pemesanan pelanggan.`, finance: "Pendapatan, HPP, pengeluaran, dan laba.", team: "Anggota tim dan hak akses tiap peran." })[view]}</p></div></div><div className="heading-actions">{view === "overview" ? <><button className="button secondary" onClick={() => go("finance")}><ArrowDownToLine size={15}/>Lihat laporan</button><button className="button primary" onClick={() => go("pos")}><Plus size={17}/>Transaksi baru</button></> : view === "purchases" || view === "inventory" ? <>{view === "inventory" && canManageCatalog && <button className="button secondary" onClick={() => openInventoryEditor()}><Plus size={16}/>Tambah bahan</button>}<button className="button primary" disabled={!canRecordOperations} onClick={() => open("purchase")}><Plus size={17}/>Catat pembelian</button></> : view === "products" && canManageCatalog ? <button className="button primary" onClick={() => openProductEditor()}><Plus size={16}/>Tambah menu</button> : view === "team" && mode === "cloud" && user?.role === "owner" ? <button className="button primary" onClick={() => open("invite")}><UserPlus size={16}/>Undang anggota</button> : view === "finance" ? <><button className="button secondary" onClick={downloadCsv}><ArrowDownToLine size={16}/>Ekspor CSV</button><button className="button primary" disabled={!canRecordOperations} onClick={() => open("expense")}><Plus size={16}/>Catat pengeluaran</button></> : view === "transactions" ? <button className="button secondary" onClick={downloadCsv}><ArrowDownToLine size={16}/>Ekspor transaksi</button> : view === "customers" ? <button className="button primary" disabled={!canManageCustomers} onClick={() => open("customer")}><Plus size={16}/>Tambah pelanggan</button> : view === "pos" ? <button className="button voice-button" disabled={!canRecordOperations} onClick={() => { setParsed(null); setVoiceText(""); open("voice"); }}><Mic size={17}/>{mode === "local" ? "Ketik / suara" : "Catat pakai suara"}{mode === "local" ? <span className="ai-badge">Parser lokal</span> : <AiBadge/>}</button> : null}</div></div>
+        {view !== "storefront" && <div className={`page-heading${view === "overview" ? " overview-heading" : view === "pos" || view === "transactions" || view === "products" || view === "inventory" || view === "purchases" || view === "customers" || view === "finance" || view === "team" ? " operations-heading" : ""}`} data-tour="page-heading"><div className="page-title-group"><PageArt view={view}/><div><div className="eyebrow">{view === "overview" ? (activeToday === DEMO_DATE ? "MINGGU, 18 OKTOBER 2026" : new Date(`${activeToday}T12:00:00`).toLocaleDateString("id-ID", { weekday: "long", day: "numeric", month: "long", year: "numeric" }).toUpperCase()) : `${state.business.name.toUpperCase()} · WORKSPACE`}</div><h1 id="page-title" tabIndex={-1}>{view === "overview" ? <>{ready ? greeting(new Date().getHours()) : "Halo"}, {state.business.owner.split(" ")[0]}</> : view === "pos" ? "Kasir" : pageNames[view]}</h1><p>{({ overview: "Penjualan, stok, dan hasil usahamu hari ini.", pos: "Pilih menu, periksa pesanan, lalu catat pembayaran.", transactions: "Riwayat penjualan, metode bayar, dan struk.", products: "Harga jual, resep, dan HPP setiap menu.", inventory: "Sisa stok bahan baku dan batas pesan ulang.", purchases: "Belanja bahan dari pemasok.", customers: "Data pelanggan, kunjungan, dan poin.", storefront: `Etalase ${state.business.name} — pratinjau pemesanan pelanggan.`, finance: "Pendapatan, HPP, pengeluaran, dan laba.", team: "Anggota tim dan hak akses tiap peran." })[view]}</p></div></div><div className="heading-actions">{view === "overview" ? <><button className="button secondary" onClick={() => go("finance")}><ArrowDownToLine size={15}/>Lihat laporan</button><button className="button primary" onClick={() => go("pos")}><Plus size={17}/>Transaksi baru</button></> : view === "purchases" || view === "inventory" ? <>{view === "inventory" && canManageCatalog && <button className="button secondary" onClick={() => openInventoryEditor()}><Plus size={16}/>Tambah bahan</button>}<button className="button primary" disabled={!canRecordOperations} onClick={() => open("purchase")}><Plus size={17}/>Catat pembelian</button></> : view === "products" && canManageCatalog ? <button className="button primary" onClick={() => openProductEditor()}><Plus size={16}/>Tambah menu</button> : view === "team" && mode === "cloud" && user?.role === "owner" ? <button className="button primary" onClick={() => open("invite")}><UserPlus size={16}/>Undang anggota</button> : view === "finance" ? <><button className="button secondary" onClick={downloadCsv}><ArrowDownToLine size={16}/>Ekspor CSV</button><button className="button primary" disabled={!canRecordOperations} onClick={() => open("expense")}><Plus size={16}/>Catat pengeluaran</button></> : view === "transactions" ? <button className="button secondary" onClick={downloadCsv}><ArrowDownToLine size={16}/>Ekspor transaksi</button> : view === "customers" ? <button className="button primary" disabled={!canManageCustomers} onClick={() => open("customer")}><Plus size={16}/>Tambah pelanggan</button> : view === "pos" ? <button className="button voice-button" disabled={!canRecordOperations} onClick={() => { voiceConsumedGuard.current = false; setVoiceConsumed(false); setVoiceText(""); invalidateVoicePreview(); open("voice"); }}><Mic size={17}/>{mode === "local" ? "Ketik / suara" : "Catat pakai suara"}{mode === "local" ? <span className="ai-badge">Parser lokal</span> : <AiBadge/>}</button> : null}</div></div>}
 
         {ready && !tour && <WelcomeGuide key={`${guideStorageKey(mode, user?.id, workspaceId)}:${demoRevision}`} storageKey={guideStorageKey(mode, user?.id, workspaceId)} mode={mode} onStart={() => startTour()} onHelp={() => open("guide")}/>}
         {!canRecordOperations && <div className="notice neutral"><ShieldCheck size={18}/><p>Mode lihat saja untuk peran dapur. Pencatatan penjualan, pembelian, dan pengeluaran tersedia untuk owner, manager, atau kasir.</p></div>}
@@ -1459,7 +1534,7 @@ export default function LarisApp({ mode = "local", initialState, today, workspac
           );
         })()}
 
-        {view === "products" && <><div className="notice green"><BookOpen size={20}/><div><strong>Resep yang konsisten, margin yang terjaga.</strong><p>Setiap transaksi otomatis mengurangi bahan sesuai resep. Pilih menu untuk melihat atau mengubah komposisinya.</p></div>{canManageCatalog && <button className="button primary small" onClick={() => openProductEditor()}><Plus size={15}/>Tambah menu</button>}</div>{products.length === 0 ? <section className="panel"><EmptyState title="Bangun katalog usahamu" description={canManageCatalog ? "Tambahkan menu, harga, dan resep pertama untuk mulai mencatat penjualan." : "Pemilik atau manager belum menambahkan menu ke workspace ini."}/>{canManageCatalog && <button className="button primary" onClick={() => openProductEditor()}><Plus size={16}/>Tambah menu pertama</button>}</section> : <div className="recipe-grid">{products.map(product => <button className="panel recipe-card" key={product.id} onClick={() => { setSelectedProduct(product); open("recipe"); }}><Image src={productImage(product)} alt={product.name} width={120} height={120}/><div><Badge tone={product.active === false ? "amber" : "neutral"}>{product.active === false ? "Nonaktif" : product.category}</Badge><h3>{product.name}</h3><p>{currency(product.price)} <span>· {product.category} · {product.recipe.length} bahan</span></p><span className="recipe-margin">Margin {product.price > 0 ? Math.round((product.price - product.cost) / product.price * 100) : 0}%<ArrowUpRight size={14}/></span></div></button>)}</div>}</>}
+        {view === "products" && <>{products.length === 0 ? <section className="panel"><EmptyState title="Bangun katalog usahamu" description={canManageCatalog ? "Tambahkan menu, harga, dan resep pertama untuk mulai mencatat penjualan." : "Pemilik atau manager belum menambahkan menu ke workspace ini."}/>{canManageCatalog && <button className="button primary" onClick={() => openProductEditor()}><Plus size={16}/>Tambah menu pertama</button>}</section> : <div className="recipe-grid">{products.map(product => <button className="panel recipe-card" key={product.id} onClick={() => { setSelectedProduct(product); open("recipe"); }}><Image src={productImage(product)} alt={product.name} width={120} height={120}/><div><Badge tone={product.active === false ? "amber" : "neutral"}>{product.active === false ? "Nonaktif" : product.category}</Badge><h3>{product.name}</h3><p>{currency(product.price)} <span>· {product.category} · {product.recipe.length} bahan</span></p><span className="recipe-margin">Margin {product.price > 0 ? Math.round((product.price - product.cost) / product.price * 100) : 0}%<ArrowUpRight size={14}/></span></div></button>)}</div>}</>}
 
         {view === "inventory" && <><div className="inventory-stats"><div className="panel stat-block"><Package size={22}/><div><span>Total bahan baku</span><strong>{inventory.length} bahan</strong></div></div><div className="panel stat-block amber"><Bell size={22}/><div><span>Perlu dibeli lagi</span><strong>{lowStock.length} bahan</strong></div></div><button data-tour="forecast" className="panel stat-block forecast-shortcut" onClick={() => open("forecast")}><Sparkles size={22}/><div><span>Rencanakan kebutuhanmu</span><strong>Lihat belanja besok<ArrowUpRight size={17}/></strong></div></button></div><section className="panel"><SectionHeading title="Persediaan bahan" subtitle="Stok saat ini berasal dari stok awal dan seluruh pergerakan bahan." action={canManageCatalog ? "Tambah bahan" : undefined} onAction={() => openInventoryEditor()}/>{inventory.length === 0 ? <EmptyState title="Belum ada bahan baku" description={canManageCatalog ? "Tambahkan bahan dan stok awal untuk mulai menyusun resep." : "Pemilik atau manager belum menambahkan bahan."}/> : <div className="table-scroll"><table><thead><tr><th>Bahan baku</th><th>Stok saat ini</th><th>Batas minimum</th><th>Supplier</th><th>Status</th><th/></tr></thead><tbody>{inventory.map(item => { const stock = getStock(state, item.id); return <tr key={item.id}><td><div className="table-name"><span className="table-icon"><Package size={17}/></span><div><strong>{item.name}</strong><small>{currency(item.cost)} / {item.unit}</small></div></div></td><td><strong>{stock.toLocaleString("id-ID")}</strong> {item.unit}</td><td>{item.reorderPoint.toLocaleString("id-ID")} {item.unit}</td><td>{item.supplier}</td><td><Badge tone={stock <= item.reorderPoint ? "amber" : "green"}>{stock <= item.reorderPoint ? "Stok menipis" : "Stok aman"}</Badge></td><td><div className="inline-actions">{canManageCatalog && <><button className="text-button" onClick={() => openInventoryEditor(item)}><Pencil size={13}/>Ubah / opname</button><button className="text-button destructive-text" onClick={() => askConfirm({ kind: "inventory", item })}><Trash2 size={13}/>Hapus</button></>}<button className="text-button" disabled={!canRecordOperations} onClick={() => { setPurchaseItem(item.id); open("purchase"); }}>Beli<Plus size={13}/></button></div></td></tr>; })}</tbody></table></div>}</section><section className="panel ledger-panel" data-tour="inventory-ledger"><SectionHeading title="Pergerakan stok terbaru" subtitle="Semua perubahan disimpan sebagai catatan, bukan menimpa jumlah stok."/>{state.stockMovements.length === 0 ? <EmptyState title="Belum ada pergerakan stok" description="Penjualan, pembelian, dan opname barumu akan tampil di sini."/> : <div className="table-scroll"><table><thead><tr><th>Bahan</th><th>Jenis</th><th>Jumlah</th><th>Waktu</th></tr></thead><tbody>{state.stockMovements.slice(-10).reverse().map(movement => <tr key={movement.id}><td>{inventory.find(item => item.id === movement.itemId)?.name ?? movement.itemId}</td><td>{movement.type === "sale" ? "Penjualan" : movement.type === "purchase" ? "Pembelian" : movement.reference === "opening" ? "Stok awal" : "Penyesuaian / opname"}</td><td><Badge tone={movement.quantity > 0 ? "green" : "amber"}>{movement.quantity > 0 ? "+" : ""}{movement.quantity.toLocaleString("id-ID")}</Badge></td><td>{shortDate(movement.createdAt)} · {time(movement.createdAt)}</td></tr>)}</tbody></table></div>}</section></>}
 
@@ -1467,7 +1542,7 @@ export default function LarisApp({ mode = "local", initialState, today, workspac
 
         {view === "customers" && <><div className="customer-summary" data-tour="customer-activity"><div><span className="customer-summary-icon"><Users size={26}/></span><div><strong>{state.customers.length}</strong><p>Pelanggan sudah jadi bagian cerita kita.</p></div></div><div><span className="customer-summary-icon"><Gift size={26}/></span><div><strong>{state.customers.reduce((total, customer) => total + customer.points, 0).toLocaleString("id-ID")}</strong><p>Poin loyalitas yang terkumpul.</p></div></div></div><section className="panel"><div className="customer-filters"><div className="category-tabs">{["Semua", "Juara", "Setia", "Potensial", "Berisiko", "Hilang"].map(item => <button key={item} aria-pressed={segment === item} className={segment === item ? "active" : ""} onClick={() => setSegment(item)}>{item}</button>)}</div><label className="search-input"><Search size={16}/><input aria-label="Cari pelanggan berdasarkan nama atau telepon" value={query} onChange={event => setQuery(event.target.value)} placeholder="Cari pelanggan..."/></label></div><div className="table-scroll"><table><thead><tr><th>Pelanggan</th><th>Segmen</th><th>Kunjungan</th><th>Total belanja</th><th>Poin</th><th>Kunjungan terakhir</th><th/></tr></thead><tbody>{state.customers.filter(customer => (segment === "Semua" || customer.segment === segment) && `${customer.name} ${customer.phone}`.toLowerCase().includes(query.toLowerCase())).map((customer, i) => <tr key={customer.id}><td><div className="table-name"><span className={`avatar avatar-${i % 4}`}>{initials(customer.name)}</span><div><strong>{customer.name}</strong><small>{customer.phone}</small></div></div></td><td><Badge tone={customer.segment === "Berisiko" || customer.segment === "Hilang" ? "amber" : customer.segment === "Juara" ? "purple" : "green"}>{customer.segment}</Badge></td><td>{customer.visits} kali</td><td><strong>{currency(customer.totalSpent)}</strong></td><td>{customer.points}</td><td>{shortDate(customer.lastVisit)}</td><td><div className="inline-actions">{canManageCustomers && <button className="text-button" onClick={() => { setCustomerEditor(customer); open("customer"); }}><Pencil size={13}/>Ubah</button>}{canDeleteCustomers && <button className="text-button destructive-text" onClick={() => askConfirm({ kind: "customer", customer })}><Trash2 size={13}/>Hapus</button>}</div></td></tr>)}</tbody></table></div>{!state.customers.some(customer => (segment === "Semua" || customer.segment === segment) && `${customer.name} ${customer.phone}`.toLowerCase().includes(query.toLowerCase())) && <EmptyState title="Belum ada pelanggan di sini" description="Coba segmen atau kata kunci lainnya."/>}</section><p className="page-disclaimer">{mode === "local" ? "Data pelanggan fiktif untuk demo. " : ""}Segmen dihitung dari kunjungan dan waktu kunjungan terakhir, bukan skor kredit atau rekomendasi pemasaran.</p></>}
 
-        {view === "storefront" && <><div className="storefront-cover"><div><span><Store size={17}/>ETALASE · {state.business.outlet.toUpperCase()}</span><h2>Menu favoritmu.<br/>Siap dipesan.</h2><p>Pilih menu, periksa pesanan, lalu catat pembayaran pelanggan.</p><Badge><span className="status-dot"/>Pratinjau pemesanan internal</Badge></div><Image src={productImage(products[0] ?? demoProducts[0])} alt={`Menu dari ${state.business.name}`} width={380} height={380}/><div className="storefront-name">{state.business.name}<small>Dibuat sepenuh hati, untuk teman menjalani hari.</small></div></div><div className="notice neutral"><Store size={18}/><p>Ini adalah pratinjau internal, bukan halaman publik. Pesanan yang dikonfirmasi masuk ke transaksi {mode === "cloud" ? "usaha di cloud" : "demo lokal"}.</p></div><div className="storefront-tools"><div className="category-tabs">{categories.map(item => <button aria-pressed={category === item} className={category === item ? "active" : ""} key={item} onClick={() => setCategory(item)}>{item}</button>)}</div><button className="button primary" disabled={!reconciledCart.items.length || reconciledCart.removed.length > 0} onClick={() => open("checkout")}><ShoppingBasket size={17}/>{cartCount} item · {currency(cartTotal.total)}<ArrowRight size={15}/></button></div>{renderProductCards(true)}</>}
+        {view === "storefront" && <><div className="storefront-cover storefront-heading" data-tour="page-heading"><div className="storefront-intro"><h1 id="page-title" tabIndex={-1}>Menu {state.business.name}</h1><p>{state.business.outlet}</p></div><div className="storefront-photo"><Image src={productImage(products[0] ?? demoProducts[0])} alt="Ilustrasi menu" width={380} height={380}/></div></div><div className="notice neutral"><Store size={18}/><p>Ini adalah pratinjau internal, bukan halaman publik. Pesanan yang dikonfirmasi masuk ke transaksi {mode === "cloud" ? "usaha di cloud" : "demo lokal"}.</p></div><div className="storefront-tools"><div className="category-tabs">{categories.map(item => <button aria-pressed={category === item} className={category === item ? "active" : ""} key={item} onClick={() => setCategory(item)}>{item}</button>)}</div><button className="button primary" disabled={!reconciledCart.items.length || reconciledCart.removed.length > 0} onClick={() => open("checkout")}><ShoppingBasket size={17}/>{cartCount} item · {currency(cartTotal.total)}<ArrowRight size={15}/></button></div>{renderProductCards(true)}</>}
 
         {view === "finance" && <><div className="finance-top"><section className="panel profit-panel" data-tour="finance"><SectionHeading title="Laba rugi sederhana" subtitle={`${new Date(`${activeToday}T12:00:00`).toLocaleDateString("id-ID", { day: "numeric", month: "long", year: "numeric" })} · Ringkasan harian`} action="Cetak laporan" onAction={() => window.print()}/><div className="profit-line"><span>Pendapatan penjualan</span><strong>{currency(sum(todaySales))}</strong></div><div className="profit-line"><span>Harga pokok penjualan (HPP)</span><span>− {historicalCurrency(todayFinancials.cost)}</span></div><div className="profit-line subtotal"><strong>Untung kotor</strong><strong>{historicalCurrency(todayFinancials.grossProfit)}</strong></div><div className="profit-line"><span>Biaya operasional hari ini</span><span>− {currency(todayExpensesTotal)}</span></div><div className="net-profit"><span>Untung bersih<strong>{historicalCurrency(todayFinancials.grossProfit === null ? null : todayFinancials.grossProfit - todayExpensesTotal)}</strong></span><ChartNoAxesCombined size={34}/></div><p className="page-disclaimer">{todayFinancials.cost === null ? `HPP historis tidak tersedia untuk ${todayFinancials.missingCostLines} baris arsip lama. Laba tidak dapat dihitung; biaya katalog saat ini tidak menggantikan biaya historis.` : "Ringkasan berdasarkan HPP saat penjualan, bukan HPP katalog saat ini."} Belum merupakan laporan SAK EMKM lengkap.</p></section><section className="panel readiness-panel"><SectionHeading title="Kontrol operasional" subtitle="Indikator nyata dari workspace usahamu."/><div className="readiness-score"><span className="metric-icon green"><ChartNoAxesCombined size={28}/></span><div><Badge>Data aktual</Badge><h3>Operasional makin terukur.</h3><p>Jaga resep dan stok agar pencatatan tetap dapat diandalkan.</p></div></div>{[{ name: "Menu dengan resep", value: products.length ? Math.round(products.filter(product => product.recipe.length > 0).length / products.length * 100) : 0 }, { name: "Bahan di atas batas minimum", value: inventory.length ? Math.round((inventory.length - lowStock.length) / inventory.length * 100) : 0 }, { name: "Target penjualan hari ini", value: Math.min(100, Math.round(sum(todaySales) / state.dayTarget * 100)) }].map(item => <div className="readiness-line" key={item.name}><span>{item.name}</span><div><span style={{ width: `${item.value}%` }}/></div><strong>{item.value}%</strong></div>)}<div className="notice neutral"><ShieldCheck size={17}/><p>Indikator internal dari data usaha, bukan skor kredit, persetujuan pembiayaan, atau rekomendasi lembaga keuangan.</p></div></section></div><section className="panel"><SectionHeading title="Catatan pengeluaran" subtitle="Pisahkan uang pribadi dan usaha, mulai dari hal kecil." action={canRecordOperations ? "Tambah pengeluaran" : undefined} onAction={() => open("expense")}/>{state.expenses.length === 0 ? <EmptyState title="Belum ada pengeluaran" description="Catat biaya operasional untuk melihat untung bersih yang lebih lengkap."/> : <div className="table-scroll"><table><thead><tr><th>Keperluan</th><th>Kategori</th><th>Tanggal</th><th>Jumlah</th><th/></tr></thead><tbody>{[...state.expenses].sort((a, b) => b.createdAt.localeCompare(a.createdAt)).slice(0, 15).map(expense => <tr key={expense.id}><td><div className="table-name"><span className="table-icon"><ArrowUpRight size={17}/></span><strong>{expense.description}</strong></div></td><td><Badge tone="neutral">{expense.category}</Badge></td><td>{shortDate(expense.createdAt)}</td><td><strong>{currency(expense.amount)}</strong></td><td><div className="inline-actions">{canManageCatalog && <button className="text-button destructive-text" onClick={() => askConfirm({ kind: "expense", expense })}><Trash2 size={13}/>Hapus</button>}</div></td></tr>)}</tbody></table></div>}</section></>}
 
@@ -1484,7 +1559,30 @@ export default function LarisApp({ mode = "local", initialState, today, workspac
 
     {modal === "assistant" && <Modal title="Ada Laris, ada jalan." description={mode === "cloud" ? "Asisten AI dengan konteks data usaha. Jika AI tidak tersedia, jawaban dasar dihitung langsung dari data workspace." : "Asisten demo · Jawaban dihitung dari data lokal, tanpa LLM."} onClose={close}><div className="assistant-welcome"><LarisMark/><h3>Halo, {state.business.owner.split(" ")[0]}. Mau cari tahu apa?</h3><p>Dari angka penjualan sampai bahan yang perlu dibeli,<br/>kita lihat bareng-bareng.</p></div><div className="chat-messages" aria-live="polite">{messages.map((message, i) => <div key={i} className={`chat-message ${message.role}`}>{message.role === "assistant" && <Sparkles size={16}/>}<p>{message.text}</p></div>)}{pendingAi && <div className="chat-message assistant"><Sparkles size={16}/><p style={{ display: "inline-flex", alignItems: "center", gap: 6 }}><LoaderCircle size={14} className="spin"/>Laris sedang berpikir...</p></div>}</div><div className="prompt-chips">{["Menu apa yang paling laris?", "Stok apa yang perlu dibeli?", "Berapa untung hari ini?"].map(prompt => <button key={prompt} onClick={() => askAssistant(prompt)}>{prompt}<ArrowUpRight size={12}/></button>)}</div>{error && <p className="form-error" role="alert">{error}</p>}<form className="chat-input" onSubmit={event => { event.preventDefault(); askAssistant(assistantInput); }}><input aria-label="Pertanyaan untuk Laris" value={assistantInput} onChange={event => setAssistantInput(event.target.value)} placeholder="Tanya tentang usahamu..."/><button className="button primary" aria-label="Kirim pertanyaan" disabled={!assistantInput.trim() || pendingAi}>{pendingAi ? <LoaderCircle size={16} className="spin"/> : <ArrowRight size={18}/>}</button></form></Modal>}
 
-    {modal === "voice" && <Modal title="Catat cukup ngomong." description={mode === "cloud" ? "Pengenal suara browser + Gemini AI / Parser Bahasa Indonesia." : "Pengenal suara browser + parser Bahasa Indonesia dengan katalog demo di perangkat ini."} onClose={close}><div className="voice-mic"><button className={recording ? "recording" : ""} onClick={recording ? () => { speech.current?.stop(); setRecording(false); } : startVoice} aria-label={recording ? "Hentikan rekaman" : "Mulai rekam pesanan"}><Mic size={32}/></button><p>{recording ? "Laris sedang mendengarkan..." : "Tekan mikrofon atau ketik pesananmu."}</p></div><form onSubmit={event => { event.preventDefault(); handleVoiceParse(voiceText); }}><label className="field"><span>Pesanan pelanggan</span><textarea rows={3} placeholder={voiceSample || "Tulis pesanan pelanggan"} value={voiceText} onChange={event => { aiRequests.cancel(); setPendingAi(false); setVoiceText(event.target.value); setParsed(null); setVoiceNotice(""); }}/></label><button type="button" className="sample-prompt" disabled={!voiceSample} onClick={() => { setVoiceText(voiceSample); handleVoiceParse(voiceSample); }}>Coba contoh dari katalog<ArrowUpRight size={13}/></button><button className="button secondary full-width" disabled={!voiceText.trim() || pendingAi}>{pendingAi ? <><LoaderCircle size={16} className="spin"/>Membaca pesanan...</> : <><Sparkles size={16}/>Baca pesanan</>}</button></form>{voiceNotice && <p className="field-hint" role="status">{voiceNotice}</p>}{parsed && <div className="voice-preview"><h3>Cek dulu, sudah sesuai?</h3>{parsed.items.map(item => <div key={item.productId}><span>{item.quantity}× {products.find(product => product.id === item.productId)?.name}<small>{item.note}</small></span><strong>{currency((products.find(product => product.id === item.productId)?.price || 0) * item.quantity)}</strong></div>)}<p>Metode pembayaran: <strong>{parsed.payment}</strong></p>{parsed.unknown.length > 0 && <div className="form-error">Belum dikenali: {parsed.unknown.join(", ")}. Perbaiki pesanan sebelum melanjutkan.</div>}<button className="button primary full-width" disabled={!parsed.items.length || parsed.unknown.length > 0} onClick={() => { setCart(current => { const next = [...current]; for (const item of parsed.items) { const found = next.findIndex(line => line.productId === item.productId); if (found >= 0) next[found] = { ...next[found], quantity: next[found].quantity + item.quantity, note: item.note || next[found].note }; else next.push(item); } return next; }); setPayment(parsed.payment); go("pos"); close(); notify("Pesanan ditambahkan. Periksa lalu lanjutkan pembayaran."); }}><Check size={17}/>Konfirmasi ke keranjang</button></div>}{error && <p className="form-error" role="alert">{error}</p>}</Modal>}
+    {modal === "voice" && <Modal wide title="Catat cukup ngomong." description={mode === "cloud" ? "Pengenal suara browser + Gemini AI / Parser Bahasa Indonesia." : "Pengenal suara browser + parser Bahasa Indonesia dengan katalog demo di perangkat ini."} onClose={close}>
+      <div className="voice-mic"><button className={recording ? "recording" : ""} onClick={recording ? () => { const recognition = speech.current; speech.current = null; recognition?.stop(); setRecording(false); } : startVoice} aria-label={recording ? "Hentikan rekaman" : "Mulai rekam pesanan"}><Mic size={32}/></button><p>{recording ? "Laris sedang mendengarkan..." : "Tekan mikrofon atau ketik pesananmu."}</p></div>
+      <form onSubmit={event => { event.preventDefault(); void handleVoiceParse(voiceText); }}>
+        <label className="field"><span>Pesanan pelanggan</span><textarea rows={3} maxLength={2000} placeholder={voiceSample || "Tulis pesanan pelanggan"} value={voiceText} onChange={event => replaceVoiceText(event.target.value)}/></label>
+        <button type="button" className="sample-prompt" disabled={!voiceSample} onClick={() => replaceVoiceText(voiceSample, true)}>Coba contoh dari katalog<ArrowUpRight size={13}/></button>
+        <button className="button secondary full-width" disabled={!voiceText.trim() || pendingAi || recording}>{pendingAi ? <><LoaderCircle size={16} className="spin"/>Membaca pesanan...</> : <><Sparkles size={16}/>Baca pesanan</>}</button>
+      </form>
+      {voiceNotice && <p className="field-hint" role="status">{voiceNotice}</p>}
+      {parsed && voiceDraft && voiceDraftValidation && voiceMergeValidation && <VoiceOrderPreview
+        review={parsed.review}
+        draft={voiceDraft}
+        products={products}
+        existingCart={cart}
+        draftValidation={voiceDraftValidation}
+        mergeValidation={voiceMergeValidation}
+        unavailableProductIds={voiceUnavailableProductIds}
+        confirmDisabled={voiceConfirmDisabled}
+        disabledReason={voiceDisabledReason}
+        onDraftChange={setVoiceDraft}
+        onApplyProductNote={applyVoiceProductNote}
+        onConfirm={confirmVoiceOrder}
+      />}
+      {error && <p className="form-error" role="alert">{error}</p>}
+    </Modal>}
 
     {modal === "checkout" && <Modal title="Satu langkah lagi." description="Periksa pesanan dan catat pembayaran." onClose={close}><form onSubmit={checkout}><div className="checkout-summary">{reconciledCart.items.map(item => <div key={item.productId}><span>{item.quantity}× {products.find(product => product.id === item.productId)?.name}</span><strong>{currency((products.find(product => product.id === item.productId)?.price || 0) * item.quantity)}</strong><button type="button" className="icon-button" aria-label={`Hapus ${products.find(product => product.id === item.productId)?.name}`} onClick={() => { setCart(current => current.filter(line => line.productId !== item.productId)); setDiscount(0); }}><X size={13}/></button></div>)}<div className="checkout-total"><span>Total pembayaran</span><strong>{currency(cartTotal.total)}</strong></div></div><div className="payment-options">{(["Tunai", "QRIS", "Transfer"] as const).map(method => <button key={method} type="button" aria-pressed={payment === method} className={payment === method ? "selected" : ""} onClick={() => setPayment(method)}>{method === "Tunai" ? <Banknote size={22}/> : method === "QRIS" ? <Grid2X2 size={22}/> : <Landmark size={22}/>} {method}{payment === method && <Check size={13}/>}</button>)}</div>{payment === "Tunai" ? <><label className="field"><span>Uang diterima (Rp)</span><input autoComplete="off" type="number" min={cartTotal.total} required value={cash} onChange={event => setCash(event.target.value)} placeholder="Masukkan jumlah uang tunai"/></label><div className="quick-cash">{Array.from(new Set([cartTotal.total, Math.ceil(cartTotal.total / 50000) * 50000, Math.ceil(cartTotal.total / 100000) * 100000])).map(amount => <button type="button" key={amount} onClick={() => setCash(String(amount))}>{currency(amount)}</button>)}</div>{Number(cash) >= cartTotal.total && <div className="cash-change">Kembalian<strong>{currency(Number(cash) - cartTotal.total)}</strong></div>}</> : <div className="notice amber"><ShieldCheck size={20}/><p><strong>Simulasi {payment}, bukan pembayaran asli.</strong><br/>Belum terhubung ke Midtrans atau bank. Tidak ada dana yang dipindahkan.</p></div>}<div className="form-grid"><label className="field"><span>Nama pelanggan <small>(opsional)</small></span><input maxLength={80} value={customerName} onChange={event => setCustomerName(event.target.value)} placeholder="Pelanggan umum"/></label><label className="field"><span>No. telepon <small>(opsional)</small></span><input type="tel" aria-describedby="checkout-customer-hint" value={customerPhone} onChange={event => setCustomerPhone(event.target.value)} placeholder="08xxxxxxxxxx" pattern="\+?[0-9]{8,15}"/></label></div><p id="checkout-customer-hint" className="field-hint">{mode === "local" ? "Gunakan kontak fiktif untuk demo. " : "Dengan izin pelanggan, "}nomor telepon menghubungkan profil, kunjungan, dan poin. Nama saja tidak menghubungkan profil.</p>{error && <p className="form-error" role="alert">{error}</p>}<button className="button primary full-width" disabled={!reconciledCart.items.length || reconciledCart.removed.length > 0 || (payment === "Tunai" && Number(cash) < cartTotal.total) || pendingCheckout}>{pendingCheckout ? <LoaderCircle size={17} className="spin"/> : <Check size={17}/>}{payment === "Tunai" ? "Selesaikan transaksi" : `Simulasikan pembayaran ${payment}`}</button></form></Modal>}
 

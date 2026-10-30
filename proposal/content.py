@@ -21,11 +21,21 @@ META = {
         ("Repositori kode", "https://github.com/aarz24/Laris_HackathonGTNIC2026"),
         ("Video demo", "[ISI TAUTAN YOUTUBE/DRIVE AKSES PUBLIK]"),
     ],
-    "logo_note": "[SISIPKAN LOGO RESMI GTNIC 2026 DI SINI]",
+    "logo": "gtnic-logo.png",
     "footer_note": "Dokumen kerja — lengkapi placeholder sebelum pengumpulan.",
 }
 
 BLOCKS = [
+    {"t": "h1", "x": "Ringkasan Eksekutif"},
+    {"t": "p", "x": (
+        "Laris menghubungkan kasir, resep, stok, pelanggan, dan laporan dalam satu "
+        "ruang kerja untuk UMKM F&B. Satu penjualan yang dikonfirmasi mengurangi "
+        "bahan sesuai resep dan menyimpan harga serta HPP saat transaksi. Bantuan "
+        "pesanan berbahasa Indonesia bersifat opsional; pengguna tetap memegang "
+        "kendali sebelum data berubah. Prototipe menyediakan demo lokal serta mode "
+        "cloud berbasis akun. Sasaran berikutnya adalah pilot terukur, bukan klaim "
+        "efisiensi yang belum dibuktikan."
+    )},
     {"t": "h1", "x": "1. Latar Belakang Masalah Operasional UMKM F&B"},
     {"t": "p", "x": (
         "Usaha food and beverage (F&B) skala mikro dan kecil menjalankan beberapa "
@@ -47,16 +57,11 @@ BLOCKS = [
         "tidak tersimpan."
     )},
     {"t": "p", "x": (
-        "Laris dirancang untuk skenario kerja tersebut. Deskripsi masalah di atas "
-        "merupakan kerangka desain produk berdasarkan karakteristik operasional usaha "
-        "F&B, bukan kesimpulan dari studi lapangan yang telah selesai dilakukan. "
-        "Data statistik pasar yang resmi perlu dilampirkan dari sumber seperti "
-        "Kementerian Koperasi dan UKM atau Badan Pusat Statistik sebelum angka pasar "
-        "dicantumkan dalam dokumen ini."
-    )},
-    {"t": "placeholder", "x": (
-        "[LENGKAPI: data statistik UMKM/F&B beserta sumber resmi dan tahun publikasi, "
-        "atau hasil wawancara singkat dengan pemilik usaha bila tersedia]"
+        "BPS mencatat 4,85 juta usaha penyediaan makanan dan minuman pada 2023, "
+        "dengan 9,80 juta pekerja [1]. Angka ini menunjukkan skala sektor, bukan "
+        "jumlah calon pelanggan Laris atau bukti bahwa semua usaha mengalami masalah "
+        "yang sama. Masalah pencatatan di atas merupakan hipotesis desain yang masih "
+        "perlu divalidasi melalui wawancara dan pilot."
     )},
 
     {"t": "h1", "x": "2. Tujuan, Manfaat, dan Solusi Teknologi"},
@@ -96,9 +101,12 @@ BLOCKS = [
         "menentukan prioritas belanja."
     )},
     {"t": "p", "x": (
-        "Besarnya penghematan waktu dan dampak finansial masih berupa hipotesis yang "
-        "perlu diuji melalui pilot bersama usaha nyata; dokumen ini tidak mengklaim "
-        "angka efisiensi yang belum diukur."
+        "Pilot direncanakan pada 2–3 usaha selama dua minggu: bandingkan waktu "
+        "pencatatan untuk pesanan yang sama, jumlah koreksi per 100 transaksi, dan "
+        "selisih stok fisik per bahan sebelum serta sesudah penggunaan. Target awal "
+        "adalah penurunan median waktu pencatatan 20% tanpa kenaikan kesalahan. "
+        "Target ini belum merupakan hasil uji; biaya layanan dan kesediaan membayar "
+        "juga akan dievaluasi sebelum menetapkan model berlangganan."
     )},
 
     {"t": "h1", "x": "3. Target Pengguna dan Pasar Aplikasi"},
@@ -173,34 +181,25 @@ BLOCKS = [
         "logis ke dokumen sumber, bukan foreign key yang dideklarasikan."
     )},
     {"t": "p", "x": (
-        "Tabel pendukung yang tidak digambar adalah expense untuk biaya operasional, "
-        "audit_log untuk jejak tindakan administratif, ai_event untuk telemetri AI, dan "
-        "holiday_calendar sebagai data referensi bersama. Keberadaan tabel kalender "
-        "tidak berarti modul peramalan permintaan sudah diimplementasikan."
+        "Expense menyimpan pengeluaran dan audit_log menyimpan jejak tindakan. "
+        "Ai_event dan holiday_calendar tidak ditampilkan pada diagram. Tabel kalender "
+        "merupakan data referensi, bukan bukti fitur peramalan telah tersedia."
     )},
 
     {"t": "h1", "x": "6. Teknologi yang Digunakan"},
-    {"t": "table", "head": ["Lapisan", "Teknologi dan versi", "Peran dalam sistem"], "rows": [
-        ["Framework", "Next.js 15.5.28 (App Router, Turbopack)",
-         "Routing, server rendering, Server Actions, dan route API AI"],
-        ["Antarmuka", "React 19.1.0, TypeScript 5, lucide-react",
-         "Komponen workspace interaktif dan ikon"],
-        ["Gaya", "Tailwind CSS 4 dengan token CSS bersama",
-         "Sistem warna, radius, dan tata letak responsif"],
-        ["Basis data", "Supabase PostgreSQL, RLS, fungsi SECURITY DEFINER",
-         "Penyimpanan tenant, isolasi data, dan transaksi atomik"],
-        ["Autentikasi", "Supabase Auth (@supabase/ssr, supabase-js 2)",
-         "Registrasi, konfirmasi email, sesi, dan reset password"],
-        ["Validasi", "Zod 4",
-         "Skema masukan Server Actions dan route AI"],
-        ["AI opsional", "Vercel AI SDK 7, @ai-sdk/google 4 (Gemini)",
-         "Parsing pesanan, OCR nota, dan Tanya Laris di mode cloud"],
-        ["Pengujian", "node --test, skrip evaluasi parser, ESLint, tsc",
-         "Pemeriksaan logika, parser, tipe, dan gaya kode"],
-    ], "cap": "Tabel 1. Ringkasan teknologi dan perannya."},
+    {"t": "table", "head": ["Teknologi", "Peran dan alasan pemilihan"], "widths": [5, 9], "rows": [
+        ["Next.js 15.5.28; React 19.1.0", "Antarmuka dan server dalam satu repositori; mengurangi koordinasi antar layanan."],
+        ["TypeScript 5; Zod 4", "Pemeriksaan tipe saat pengembangan serta validasi masukan saat runtime."],
+        ["Tailwind CSS 4; lucide-react", "Token visual bersama, responsivitas, dan ikon konsisten."],
+        ["Supabase Auth; PostgreSQL", "Sesi, relasi data, RLS per usaha, transaksi RPC atomik, serta storage terkelola."],
+        ["AI SDK 7; Google SDK 4", "Integrasi Gemini di server; bantuan opsional dengan validasi dan batas waktu."],
+        ["node --test; ESLint; tsc", "Regresi logika, evaluasi parser, kualitas kode, dan tipe."],
+    ], "cap": "Tabel 1. Teknologi dan pertimbangan teknis."},
     {"t": "p", "x": (
-        "Seluruh dependensi di atas merupakan proyek open-source yang digunakan sesuai "
-        "lisensinya. Daftar lisensi ringkas dicantumkan pada bagian 13."
+        "Trade-off: Supabase mengurangi pekerjaan infrastruktur tetapi memerlukan "
+        "koneksi cloud; demo lokal bukan sinkronisasi offline. Struktur monolit "
+        "memudahkan deployment awal, tetapi komponen workspace perlu dipisah saat "
+        "cakupan tumbuh. Atribusi pustaka tercantum pada bagian 13."
     )},
 
     {"t": "h1", "x": "7. Fitur Utama dan Keunikan"},
@@ -235,7 +234,7 @@ BLOCKS = [
         "Panduan: pengenalan awal, tur yang dapat diulang, dan pencarian bantuan yang "
         "terhubung ke halaman terkait."
     )},
-    {"t": "h2", "x": "7.2 Keunikan dibanding alur kerja manual"},
+    {"t": "h2", "x": "7.2 Posisi dibanding sistem serupa"},
     {"t": "p", "x": (
         "Keunikan Laris terletak pada gabungan tiga hal dalam satu alur: pencatatan "
         "yang saling terhubung pada tingkat resep, bantuan pencatatan berbahasa "
@@ -245,10 +244,12 @@ BLOCKS = [
         "terkait sehingga rekonsiliasi ganda berkurang."
     )},
     {"t": "p", "x": (
-        "Dokumen ini tidak mengklaim bahwa produk POS komersial lain tidak memiliki "
-        "kemampuan serupa, karena belum dilakukan pembandingan fitur terhadap produk "
-        "bernama. Perbandingan yang disajikan adalah terhadap praktik pencatatan manual "
-        "yang menjadi titik awal banyak usaha mikro."
+        "Sebagai pembanding, dokumentasi Loyverse menjelaskan composite item yang "
+        "mengurangi stok komponen dan menghitung biaya dari komponennya [2]. Jadi, "
+        "stok berbasis resep bukan penemuan baru. Fokus Laris adalah alur berbahasa "
+        "Indonesia yang menggabungkan resep, arsip HPP, dan bantuan AI dengan "
+        "konfirmasi serta sumber jawaban yang jelas. Ini merupakan perbandingan "
+        "dokumentasi terbatas, bukan benchmark keunggulan terhadap seluruh produk."
     )},
     {"t": "h2", "x": "7.3 Otomasi dengan konfirmasi manusia"},
     {"t": "p", "x": (
@@ -272,6 +273,22 @@ BLOCKS = [
         "Bila model tidak tersedia, jawaban aturan lokal diberikan dengan label sumber. "
         "Batas waktu permintaan dan pembatalan mencegah jawaban usang masuk ke dialog "
         "yang sudah ditutup atau berubah."
+    )},
+
+    {"t": "h2", "x": "7.4 Alur pengguna dan keputusan UX"},
+    {"t": "p", "x": (
+        "Skenario desain: kasir memilih menu atau mengetik pesanan, meninjau jumlah "
+        "dan catatan, lalu mengonfirmasi pembayaran. Struk mengarahkan pengguna ke "
+        "dampak transaksi; pemilik memeriksa stok serta keuangan tanpa mencatat ulang. "
+        "Pencarian, label berbahasa Indonesia, validasi, status proses, dan tur bantuan "
+        "mendukung pengguna baru. Pada ponsel, akses keranjang tetap terlihat."
+    )},
+    {"t": "p", "x": (
+        "Regresi teknis sebelumnya memandu dua perbaikan: menu yang dihapus tidak "
+        "lagi merusak keranjang, dan perubahan harga tidak mengubah struk lama. "
+        "Uji kegunaan direncanakan melalui tugas mencari menu, checkout, memeriksa "
+        "stok, dan mencatat pembelian; ukur keberhasilan tugas, waktu, serta bantuan "
+        "yang diperlukan. Belum ada wawancara pengguna atau skor SUS yang dilaporkan."
     )},
 
     {"t": "h1", "x": "8. Keamanan dan Integritas Data"},
@@ -319,19 +336,18 @@ BLOCKS = [
     )},
     {"t": "h2", "x": "8.3 Batas klaim keamanan"},
     {"t": "p", "x": (
-        "Poin-poin di atas adalah kontrol yang telah diimplementasikan, bukan "
-        "sertifikasi keamanan. Sebelum dipakai dengan data pelanggan nyata, deployment "
-        "masih memerlukan uji isolasi tenant pada environment tujuan, pengelolaan "
-        "rahasia, verifikasi backup dan pemulihan, serta telaah privasi dan retensi "
-        "data. Skrip uji RLS terhadap Supabase tersedia pada repositori, namun belum "
-        "dijalankan ulang untuk penyusunan dokumen ini."
+        "Kontrol ini bukan sertifikasi keamanan. Deployment tujuan masih memerlukan "
+        "uji isolasi tenant, alur email, backup/pemulihan, serta privasi dan retensi "
+        "data. Uji cloud tidak dijalankan ulang untuk revisi proposal ini."
     )},
 
     {"t": "h1", "x": "9. Verifikasi dan Pengujian"},
     {"t": "p", "x": (
-        "Pemeriksaan berikut dijalankan pada mesin pengembangan dan seluruhnya lulus."
+        "Pemeriksaan lokal diulang pada 29 Oktober 2026 terhadap aplikasi pada commit "
+        "4b3dabc; perubahan proposal tidak mengubah kode aplikasi. Seluruh pemeriksaan "
+        "pada Tabel 2 lulus."
     )},
-    {"t": "table", "head": ["Pemeriksaan", "Perintah", "Hasil"], "rows": [
+    {"t": "table", "head": ["Pemeriksaan", "Perintah", "Hasil"], "widths": [4, 5, 5], "rows": [
         ["Tipe TypeScript", "npm run typecheck", "Lulus tanpa error"],
         ["Gaya kode", "npm run lint", "Lulus tanpa peringatan"],
         ["Unit dan logika", "npm test", "147 dari 147 pengujian lulus"],
@@ -382,8 +398,9 @@ BLOCKS = [
         "demo tidak dipindahkan menjadi data usaha."
     )},
     {"t": "b", "x": (
-        "Audit aksesibilitas menyeluruh, uji performa pada perangkat kelas bawah, dan "
-        "uji beban belum dilakukan."
+        "Audit aksesibilitas, uji beban, perangkat kelas bawah, tablet, serta "
+        "pengujian menyeluruh Firefox/Safari/Edge belum diselesaikan. Bukti tangkapan "
+        "layar hanya mencakup Chrome pada dua ukuran yang disebutkan."
     )},
     {"t": "b", "x": (
         "Komponen workspace utama masih berukuran besar dalam satu berkas; pemecahan "
@@ -412,10 +429,6 @@ BLOCKS = [
     {"t": "img", "f": "pos-mobile.png", "w": 4.2, "cap": (
         "Gambar 7. Halaman Kasir pada 390 x 844: navigasi ringkas dan tombol keranjang "
         "yang tetap terjangkau pada layar ponsel."
-    )},
-    {"t": "placeholder", "x": (
-        "[OPSIONAL: tambahkan tangkapan layar mode cloud setelah deploy, misalnya "
-        "halaman Keuangan dan Tim & akses dari akun penjurian]"
     )},
 
     {"t": "h1", "x": "12. Rencana Pengembangan Lanjutan"},
@@ -449,23 +462,79 @@ BLOCKS = [
 
     {"t": "h1", "x": "13. Lisensi dan Atribusi Pihak Ketiga"},
     {"t": "p", "x": (
-        "Karya ini menggunakan pustaka open-source sesuai ketentuan lisensinya. "
-        "Next.js, React, Tailwind CSS, TypeScript, Zod, Vercel AI SDK, pustaka klien "
-        "Supabase, dan lucide-react didistribusikan dengan lisensi MIT atau ISC "
-        "sebagaimana tercantum pada masing-masing paket di node_modules dan "
-        "package-lock.json. Layanan Supabase dan Google Gemini dipakai sebagai layanan "
-        "pihak ketiga melalui kredensial milik tim."
+        "Lisensi paket: Next.js, React, Tailwind CSS, Zod, Vercel AI SDK, dan klien "
+        "Supabase memakai MIT; TypeScript memakai Apache-2.0; lucide-react memakai "
+        "ISC. Rujukan lisensi adalah metadata dan berkas LICENSE paket terpasang. "
+        "Layanan Supabase dan Gemini tunduk pada ketentuan layanan masing-masing."
     )},
     {"t": "placeholder", "x": (
-        "[LENGKAPI: sumber dan lisensi aset visual, termasuk gambar menu contoh dan "
-        "ikon, bila berasal dari pihak ketiga]"
+        "[KONFIRMASI SUMBER ASET: asal dan hak penggunaan enam gambar menu WebP "
+        "di public/images; keberadaan berkas gambar saja belum membuktikan lisensi]"
     )},
     {"t": "p", "x": (
-        "Kode sumber tersedia pada repositori publik yang dicantumkan di halaman "
-        "sampul. Berkas .env, service-role key, dan kunci API tidak disertakan dalam "
-        "repositori."
+        "Diagram dibuat dari migration proyek; tangkapan layar berasal dari demo "
+        "fiktif. Logo resmi GTNIC diambil tanpa perubahan bentuk atau warna dari "
+        "Guide Book Web Dev, halaman 19, untuk identitas kompetisi pada sampul. "
+        "Akses publik repositori dan deployment perlu dipastikan sebelum pengumpulan; "
+        "rahasia server tidak boleh disertakan."
     )},
+    {"t": "h1", "x": "14. Penutup dan Panduan Penjurian"},
+    {"t": "p", "x": (
+        "Nilai utama Laris adalah keterhubungan data operasional, bukan jumlah fitur "
+        "AI. Untuk menilai alur inti, buka /demo dari website pada sampul, pilih "
+        "menu, selesaikan checkout simulasi, lalu periksa struk, stok bahan, dan "
+        "laporan. Demo tidak memindahkan dana dan tidak membuktikan otorisasi cloud."
+    )},
+    {"t": "p", "x": (
+        "Untuk uji cloud, gunakan workspace khusus berisi data fiktif dan akun uji "
+        "owner, manager, kasir, serta dapur. Uji login, perubahan data sesuai peran, "
+        "dan penolakan tindakan di luar izin. Akun penjurian tidak boleh memakai "
+        "data pelanggan nyata atau kredensial administrator layanan."
+    )},
+    {"t": "placeholder", "x": (
+        "[LENGKAPI AKSES JURI: URL deployment dan akun uji terpisah untuk keempat "
+        "peran; isi hanya kredensial demo khusus melalui dokumen pengumpulan]"
+    )},
+    {"t": "h1", "x": "Daftar Pustaka"},
+    {"t": "ref", "x": "[1] Badan Pusat Statistik. (2024). Statistik Penyediaan Makanan dan Minuman 2023. Terbit 23 Desember 2024.",
+     "url": "https://www.bps.go.id/id/publication/2024/12/23/f2c7743c4712aaeaa4abf694/statistik-penyediaan-makanan-dan-minuman-2023.html"},
+    {"t": "ref", "x": "[2] Loyverse Help Center. How to Create a Composite Item. Diakses 29 Oktober 2026.",
+     "url": "https://help.loyverse.com/help/how-create-composite-item"},
 ]
+
+SUBMISSION_CHECKLIST = """LARIS - SUBMISSION CHECKLIST (not part of the proposal)
+Deadline: November 10, 2026, 23:59 WIB. Source: guidebook, page 10.
+
+The generated proposal is a DRAFT until the following are completed:
+1. Replace the team name and member/institution/student-ID placeholders.
+   Remove unused member rows for an individual or two-person entry.
+2. Supply the public HTTPS website and public 3-5 minute video URLs.
+3. Supply dedicated fictional-data judge accounts for owner, manager, kasir,
+   and dapur in the submission copy; verify permissions and email journeys.
+   Never publish service-role/API keys or personal account passwords.
+4. Confirm the provenance and usage rights of all six menu images.
+5. Confirm all originality statements personally, fill the representative's
+   details, date/place, and sign the separate declaration. This is a template,
+   not a signed or organizer-approved declaration.
+6. Verify public repository/site/video access without your account, all eight
+   migrations on the target deployment, seeded demo data, and browser/tablet
+   behavior. Automated local tests do not establish deployment readiness.
+7. Rebuild after editing content.py, inspect PDF pagination (maximum 15 pages),
+   and rename the PDF to GTNIC2026_WebDev_<RegisteredTeamName>.pdf.
+   The DOCX is editable; Word pagination can differ from the validated PDF.
+8. Submit the site, repository, video, proposal, and signed declaration using
+   the organizer's official form. Nothing has been uploaded automatically.
+
+SUGGESTED FOUR-MINUTE VIDEO RUN OF SHOW
+0:00-0:25  Introduce the registered team and the operational problem.
+0:25-0:50  Explain the owner/cashier scenario and the connected workflow.
+0:50-2:10  Show menu selection, order confirmation, and simulated checkout.
+2:10-2:50  Follow the same sale into receipt, stock deduction, and finance.
+2:50-3:20  Show optional order parsing with its source label and human review.
+3:20-3:45  Explain cloud roles, architecture, and honest system limitations.
+3:45-4:00  Close with planned pilot metrics and public demo/repository links.
+Use only fictional data. Never display private keys or real customer data.
+"""
 
 PLEDGE = {
     "title": "SURAT PERNYATAAN KEASLIAN KARYA",

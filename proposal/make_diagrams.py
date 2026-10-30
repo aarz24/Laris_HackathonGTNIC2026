@@ -7,6 +7,7 @@ migration berikutnya; tidak ada tabel yang direka.
 
 from pathlib import Path
 from PIL import Image, ImageDraw, ImageFont
+import pymupdf
 
 ROOT = Path(__file__).resolve().parent
 ASSETS = ROOT / "assets"
@@ -46,6 +47,23 @@ def r(draw, box, fill, outline, width=1, radius=4):
 
 def text(draw, pos, value, fnt, fill=INK, anchor="la"):
     draw.text((pos[0] * S, pos[1] * S), value, font=fnt, fill=fill, anchor=anchor)
+
+
+def wrapped_text(draw, pos, value, fnt, fill=INK, width=840):
+    """Wrap diagram notes inside the image instead of clipping at its edge."""
+    words = value.split()
+    row = ""
+    y = pos[1]
+    for word in words:
+        candidate = f"{row} {word}".strip()
+        if draw.textlength(candidate, font=fnt) > width * S and row:
+            text(draw, (pos[0], y), row, fnt, fill)
+            y += 14
+            row = word
+        else:
+            row = candidate
+    if row:
+        text(draw, (pos[0], y), row, fnt, fill)
 
 
 def line(draw, points, fill=LINE, width=1):
@@ -138,7 +156,7 @@ def connect(d, p1, s1, p2, s2, label="1:N", gap=14):
 
 
 def architecture():
-    img, d = canvas(900, 470)
+    img, d = canvas(900, 485)
     text(d, (450, 12), "Arsitektur Laris", F_HEAD, INK, "ma")
 
     lanes = [
@@ -199,7 +217,7 @@ def architecture():
     connect(d, by["Server Actions"].at("e", 0.8), "e",
             by["Storage"].at("w", 0.25), "w", "unggah")
 
-    text(d, (24, 446),
+    wrapped_text(d, (24, 446),
          "Setiap permintaan halaman melewati middleware untuk penyegaran sesi. Mode demo "
          "lokal tidak memanggil Gemini dan tidak menulis ke Supabase; bantuan AI hanya "
          "menyarankan, sedangkan penulisan ledger tetap melalui RPC terverifikasi.",
@@ -208,34 +226,34 @@ def architecture():
 
 
 def erd_commerce():
-    img, d = canvas(900, 560)
+    img, d = canvas(900, 580)
     text(d, (450, 12), "ERD inti: penjualan, menu, resep, bahan", F_HEAD, INK, "ma")
 
     boxes = [
         Entity("business", 30, 48, 190, ["id uuid PK", "name, type", "settings jsonb"]),
-        Entity("product", 30, 150, 190, ["id uuid PK", "business_id FK", "code unique",
+        Entity("product", 30, 150, 190, ["id uuid PK", "business_id FK", "code (unique per business)",
                                          "name, category", "is_active bool"]),
         Entity("product_variant", 30, 288, 190, ["id uuid PK", "product_id FK",
                                                  "name, price bigint", "is_default bool"]),
         Entity("recipe_line", 30, 409, 190, ["variant_id FK", "inventory_item_id FK",
-                                             "qty numeric(14,3)"]),
+                                             "qty_base_unit numeric(14,3)"]),
         Entity("inventory_item", 268, 409, 196, ["id uuid PK", "business_id FK",
-                                                 "code, name, unit", "cost_per_unit numeric",
-                                                 "reorder_level numeric"]),
+                                                 "code, name, base_unit", "avg_cost_per_unit numeric",
+                                                 "reorder_point numeric"]),
         Entity("customer", 268, 48, 196, ["id uuid PK", "business_id FK",
                                           "name, phone", "visits int",
-                                          "total_spend bigint", "points_balance bigint"]),
+                                          "total_spent bigint", "points_balance bigint"]),
         Entity("sales_order", 520, 48, 230, ["id uuid PK", "business_id FK",
                                              "outlet_id FK", "customer_id FK null",
                                              "subtotal, tax, total bigint",
-                                             "channel, status", "idempotency_key text"],
+                                             "cash_received bigint", "idempotency_key text"],
                accent=True),
         Entity("order_item", 520, 215, 230, ["id uuid PK", "order_id FK",
-                                             "variant_id FK null", "product_code, name",
-                                             "unit_price bigint", "unit_cost numeric(14,4)",
-                                             "quantity numeric", "note text"], accent=True),
+                                             "variant_id FK", "product_code, name",
+                                             "unit_price bigint", "unit_cost bigint",
+                                             "quantity int", "note text"], accent=True),
         Entity("payment", 520, 400, 230, ["id uuid PK", "order_id FK",
-                                          "method, amount bigint", "cash_received, change"]),
+                                          "method, amount bigint", "provider_ref, status"]),
     ]
     by = {b.name: b for b in boxes}
     for b in boxes:
@@ -248,10 +266,10 @@ def erd_commerce():
     connect(d, by["sales_order"].anchor("s"), "s", by["order_item"].anchor("n"), "n")
     connect(d, by["customer"].anchor("e"), "e", by["sales_order"].at("w", 0.3), "w", "0..1:N")
     connect(d, by["product_variant"].at("e", 0.25), "e",
-            by["order_item"].at("w", 0.2), "w", "0..1:N")
+            by["order_item"].at("w", 0.2), "w", "1:N")
     path(d, [(750, 119), (806, 119), (806, 446), (750, 446)], "w", "1:N", (810, 270))
 
-    text(d, (30, 536),
+    wrapped_text(d, (30, 536),
          "Kolom terpilih; relasi business yang berulang tidak digambar ulang. Tabel "
          "order_item menyimpan harga dan biaya saat transaksi, sehingga struk dan laporan "
          "lama tidak berubah ketika menu diperbarui.",
@@ -260,37 +278,37 @@ def erd_commerce():
 
 
 def erd_operations():
-    img, d = canvas(900, 510)
+    img, d = canvas(900, 530)
     text(d, (450, 12), "ERD operasional: identitas, pembelian, ledger stok", F_HEAD, INK, "ma")
 
     boxes = [
         Entity("auth.users", 30, 48, 176, ["id uuid PK", "email"]),
         Entity("membership", 30, 130, 176, ["business_id PK/FK", "user_id PK/FK",
-                                            "role enum", "display_name"], accent=True),
+                                            "role text", "created_at"], accent=True),
         Entity("business", 30, 246, 176, ["id uuid PK", "name, type",
                                           "settings jsonb"]),
         Entity("outlet", 30, 345, 176, ["id uuid PK", "business_id FK",
                                         "name, address"]),
         Entity("supplier", 268, 48, 200, ["id uuid PK", "business_id FK",
-                                          "name, phone", "note"]),
+                                          "name, phone", "lead_time_days"]),
         Entity("purchase", 268, 164, 200, ["id uuid PK", "business_id FK",
                                            "outlet_id FK", "supplier_id FK null",
                                            "total bigint", "idempotency_key text"]),
         Entity("purchase_line", 268, 314, 200, ["id uuid PK", "purchase_id FK",
-                                                "inventory_item_id FK", "qty numeric",
-                                                "unit_cost numeric(14,4)"]),
-        Entity("inventory_item", 528, 48, 204, ["id uuid PK", "code, name, unit",
-                                                "cost_per_unit numeric",
-                                                "reorder_level numeric"]),
+                                                "inventory_item_id FK", "quantity numeric",
+                                                "total bigint"]),
+        Entity("inventory_item", 528, 48, 204, ["id uuid PK", "code, name, base_unit",
+                                                "avg_cost_per_unit numeric",
+                                                "reorder_point numeric"]),
         Entity("stock_movement", 528, 190, 204, ["id uuid PK", "outlet_id FK",
                                                  "inventory_item_id FK",
-                                                 "qty_delta numeric", "type enum",
+                                                 "qty_delta numeric", "type text",
                                                  "ref_id uuid (logis)",
                                                  "unit_cost numeric"], accent=True),
         Entity("expense", 766, 48, 112, ["id uuid PK", "category",
-                                         "amount bigint", "date"]),
-        Entity("audit_log", 766, 190, 112, ["id uuid PK", "actor_id",
-                                            "action, entity", "payload jsonb"]),
+                                         "amount bigint", "spent_at"]),
+        Entity("audit_log", 766, 190, 112, ["id bigint PK", "actor_id FK",
+                                            "action, entity", "data jsonb"]),
     ]
     by = {b.name: b for b in boxes}
     for b in boxes:
@@ -307,7 +325,7 @@ def erd_operations():
     path(d, [(206, 382), (237, 382), (237, 452), (500, 452), (500, 311), (528, 311)],
          "w", "1:N", (330, 436))
 
-    text(d, (30, 482),
+    wrapped_text(d, (30, 482),
          "Stok saat ini dihitung dari penjumlahan qty_delta pada stock_movement. Kolom "
          "ref_id menautkan pergerakan ke dokumen sumber secara logis, bukan sebagai "
          "foreign key yang dideklarasikan.",
@@ -315,7 +333,25 @@ def erd_operations():
     img.save(ASSETS / "erd-operations.png")
 
 
+def official_logo():
+    """Extract the organizer-supplied GTNIC logo from guidebook page 19."""
+    with pymupdf.open(ROOT.parent / "Guide Book Web Dev (2).pdf") as guide:
+        matches = [i for i in guide[18].get_images(full=True)
+                   if i[2:4] == (749, 460)]
+        if len(matches) != 1:
+            raise ValueError("Expected exactly one official logo on guidebook page 19")
+        xref, mask = matches[0][:2]
+        pix = pymupdf.Pixmap(guide, xref)
+        if mask:
+            pix = pymupdf.Pixmap(pix, pymupdf.Pixmap(guide, mask))
+        image = Image.frombytes("RGBA" if pix.alpha else "RGB", (pix.width, pix.height), pix.samples)
+        if pix.alpha:
+            image = image.crop(image.getchannel("A").getbbox())
+        image.save(ASSETS / "gtnic-logo.png")
+
+
 if __name__ == "__main__":
+    official_logo()
     architecture()
     erd_commerce()
     erd_operations()

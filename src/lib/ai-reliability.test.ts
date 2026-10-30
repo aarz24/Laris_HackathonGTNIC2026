@@ -10,6 +10,7 @@ import { MockLanguageModelV4 } from "ai/test";
 import * as requests from "./ai-request.ts";
 import * as fallbacks from "./ai-fallbacks.ts";
 import * as data from "./laris-data.ts";
+import * as voice from "./voice-order.ts";
 import { resetDemoSession } from "./laris-guide.ts";
 import type { AiContext } from "./ai";
 
@@ -81,6 +82,7 @@ interface GenerationCall {
   stopWhen?: number;
   output?: unknown;
   instructions: string;
+  messages?: { role: string; content: { type: string; text?: string }[] }[];
   tools?: Record<string, { execute: (input: { days: number }) => Promise<Record<string, unknown>> }>;
 }
 
@@ -114,7 +116,7 @@ function routeHarness(feature: Feature, options: {
         return options.loadContext ? options.loadContext() : context;
       },
     },
-    "@/lib/ai-request": requests, "@/lib/ai-fallbacks": fallbacks, "@/lib/laris-data": data,
+    "@/lib/ai-request": requests, "@/lib/ai-fallbacks": fallbacks, "@/lib/laris-data": data, "@/lib/voice-order": voice,
     "@/lib/rate-limit": { aiRateLimit: async () => options.rateLimit ? options.rateLimit() : options.limited ?? null },
   });
   return { ...route, calls, contextCalls: () => contextCalls, server, context };
@@ -338,6 +340,135 @@ test("audio-only provider timeout asks for typed input without a transcript", as
   for (const key of ["items", "text", "transcript", "source"]) assert.equal(key in body, false);
 });
 
+function proposalFor(text: string, catalog: voice.VoiceCatalog): voice.VoiceOrderProposal {
+  const result = voice.parseVoiceOrder(text, catalog);
+  return { lines: result.review.lines.map(line => ({ sourceId: line.id, raw: line.raw, quantity: line.quantity, productId: line.productId ?? null, ...(line.note ? { note: line.note } : {}) })), payment: { method: result.review.payment.method, raw: [...result.review.payment.raw] } };
+}
+
+test("parse-order: local and unavailable-provider paths share original transcript review evidence", async () => {
+  const state = { ...tenantState(), products: data.products };
+  const text = "2 es kopi susu 1 Americano 1 butter crossan bayar kiri";
+  for (const local of [true, false]) {
+    const route = routeHarness("parse-order", { state, local, modelAvailable: false });
+    const response = await route.POST(requestFor("parse-order", undefined, { text, mode: local ? "local" : "cloud" }));
+    const body = await response.json();
+    assert.equal(response.status, 200); assert.equal(route.calls.length, 0);
+    assert.equal(body.source, local ? "local-parser" : "fallback-parser");
+    const result = voice.validateVoiceOrderResponse(body, data.products);
+    assert.deepEqual(result.items, [{ productId: "kopi-susu", quantity: 2 }, { productId: "americano", quantity: 1 }]);
+    assert.deepEqual(result.unknown, ["1 butter crossan", "bayar kiri"]);
+    assert.equal(result.review.payment.method, null);
+    assert.equal(voice.createVoiceOrderDraft(result.review, data.products).paymentAccepted, false);
+  }
+});
+
+test("parse-order: valid text proposals overlay stable source IDs without combining carts", async () => {
+  const state = tenantState();
+  const text = "2 nasi tenant 1 nasi tenat 1 pizza bayar kiri";
+  const proposal = proposalFor(text, state.products!);
+  proposal.lines[1].productId = "tenant-meal";
+  proposal.payment.method = "QRIS";
+  const route = routeHarness("parse-order", { state, provider: async () => ({ output: proposal }) });
+  const response = await route.POST(requestFor("parse-order", undefined, { text }));
+  const body = await response.json();
+  assert.equal(response.status, 200); assert.equal(body.source, "gemini");
+  assert.deepEqual(body.items, [{ productId: "tenant-meal", quantity: 2 }]);
+  assert.deepEqual(body.unknown, ["1 nasi tenat", "1 pizza", "bayar kiri"]);
+  assert.equal(body.review.lines[1].quantity, 1); assert.notEqual(body.review.lines[1].status, "exact");
+  assert.equal(body.review.payment.method, null);
+  const prompt = route.calls[0].messages?.[0].content.find(part => part.type === "text")?.text ?? "";
+  for (const line of proposal.lines) { assert.ok(prompt.includes(line.sourceId)); assert.ok(prompt.includes(line.raw)); }
+  assert.equal(route.calls.length, 1);
+  voice.validateVoiceOrderResponse(body, state.products!);
+});
+
+test("parse-order: AI-only correction and conflicting quantities cannot enter exact items", async () => {
+  const state = tenantState();
+  const text = "2 nasi tenant 1 mystery bayar qris";
+  const proposal = proposalFor(text, state.products!);
+  proposal.lines[0].quantity = 77;
+  proposal.lines[1].productId = "tenant-meal";
+  const route = routeHarness("parse-order", { state, provider: async () => ({ output: proposal }) });
+  const response = await route.POST(requestFor("parse-order", undefined, { text }));
+  const body = await response.json();
+  assert.equal(body.source, "gemini"); assert.deepEqual(body.items, []);
+  assert.equal(body.review.lines[0].quantity, 2); assert.equal(body.review.lines[0].issue, "quantity");
+  assert.equal(body.review.lines[1].candidates[0].method, "ai");
+  const result = voice.validateVoiceOrderResponse(body, state.products!);
+  const draft = voice.createVoiceOrderDraft(result.review, state.products!);
+  assert.ok(draft.rows.every(row => !row.accepted));
+  assert.equal(voice.validateVoiceOrderDraft(result.review, draft, state.products!).ok, false);
+});
+
+test("parse-order: malformed model references and payloads fall back to unchanged source evidence", async () => {
+  const state = tenantState();
+  const text = "2 nasi tenant 1 pizza bayar qris";
+  const mutations: ((proposal: voice.VoiceOrderProposal) => void)[] = [
+    proposal => { proposal.lines.pop(); }, proposal => { proposal.lines.push({ ...proposal.lines[0] }); },
+    proposal => { proposal.lines[1].sourceId = proposal.lines[0].sourceId; }, proposal => { proposal.lines[1].sourceId = "wrong-source"; },
+    proposal => { proposal.lines[0].productId = "outside-workspace"; }, proposal => { proposal.lines[0].productId = "inactive-meal"; },
+    proposal => { proposal.lines[0].raw = "model rewrote source"; }, proposal => { proposal.lines[0].quantity = 1000; },
+    proposal => { proposal.lines[0].quantity = -1; }, proposal => { proposal.payment.raw = ["bayar tunai"]; },
+  ];
+  for (const mutate of mutations) {
+    const proposal = proposalFor(text, state.products!); mutate(proposal);
+    const route = routeHarness("parse-order", { state, provider: async () => ({ output: proposal }) });
+    const response = await route.POST(requestFor("parse-order", undefined, { text }));
+    const body = await response.json();
+    assert.equal(response.status, 200); assert.equal(body.source, "fallback-parser"); assert.equal(body.reason, "provider-error");
+    assert.deepEqual(voice.validateVoiceOrderResponse(body, state.products!), voice.parseVoiceOrder(text, state.products!));
+    assert.equal(route.calls.length, 1);
+  }
+  for (const output of [null, {}, { items: [], payment: "QRIS", unknown: [] }]) {
+    const route = routeHarness("parse-order", { provider: async () => ({ output }) });
+    const response = await route.POST(requestFor("parse-order", undefined, { text }));
+    assert.equal((await response.json()).source, "fallback-parser");
+  }
+});
+
+test("parse-order: audio-only results require every proposed item and payment to be accepted", async () => {
+  const state = tenantState();
+  const output: voice.VoiceOrderProposal = { lines: [
+    { sourceId: "heard-1", raw: "dua nasi tenant", productId: "tenant-meal", quantity: 2 },
+    { sourceId: "heard-2", raw: "satu pizza", productId: null, quantity: 1 },
+  ], payment: { method: "QRIS", raw: ["bayar qris"] } };
+  const route = routeHarness("parse-order", { state, provider: async () => ({ output }) });
+  const response = await route.POST(requestFor("parse-order", undefined, { text: "", audio: "eA==", mimeType: "audio/webm" }));
+  const body = await response.json();
+  assert.equal(response.status, 200); assert.equal(body.source, "gemini"); assert.deepEqual(body.items, []);
+  const result = voice.validateVoiceOrderResponse(body, state.products!);
+  assert.deepEqual(result.unknown, ["dua nasi tenant", "satu pizza", "bayar qris"]);
+  assert.deepEqual(result.review.lines.map(line => line.id), ["heard-1", "heard-2"]);
+  assert.equal(result.review.payment.method, null);
+  const draft = voice.createVoiceOrderDraft(result.review, state.products!);
+  assert.equal(draft.paymentAccepted, false); assert.ok(draft.rows.every(row => !row.accepted));
+  const bad = routeHarness("parse-order", { provider: async () => ({ output: { ...output, lines: [output.lines[0], output.lines[0]] } }) });
+  const failure = await bad.POST(requestFor("parse-order", undefined, { text: "", audio: "eA==" }));
+  assert.equal(failure.status, 502); assert.equal((await failure.json()).code, "AI_AUDIO_REQUIRES_TEXT");
+});
+
+test("parse-order: unsupported quantities and inactive exact products remain blocked through Gemini", async () => {
+  const state = tenantState();
+  const text = "1,5 nasi tenant 1 menu nonaktif bayar kiri";
+  const proposal = proposalFor(text, state.products!);
+  proposal.lines[0].quantity = 2; proposal.lines[0].productId = "tenant-meal";
+  proposal.lines[1].productId = "tenant-meal";
+  const route = routeHarness("parse-order", { state, provider: async () => ({ output: proposal }) });
+  const body = await (await route.POST(requestFor("parse-order", undefined, { text }))).json();
+  assert.equal(body.source, "gemini"); assert.deepEqual(body.items, []);
+  assert.equal(body.review.lines[0].quantity, null); assert.equal(body.review.lines[0].issue, "quantity");
+  assert.equal(body.review.lines[1].issue, "unavailable"); assert.deepEqual(body.review.lines[1].candidates, []);
+});
+
+test("parse-order: limits reject the entire request before any provider invocation", async () => {
+  for (const [text, status] of [["x".repeat(2001), 400], [" ".repeat(2001), 400], [Array(51).fill("1 nasi tenant").join(" "), 422]] as const) {
+    const route = routeHarness("parse-order");
+    const response = await route.POST(requestFor("parse-order", undefined, { text }));
+    assert.equal(response.status, status); assert.equal(route.calls.length, 0);
+    assert.equal((await response.json()).items, undefined);
+  }
+});
+
 test("cloud OCR without a model never returns demo content; local demo stays labeled", async () => {
   const cloud = routeHarness("scan-receipt", { modelAvailable: false });
   const failed = await cloud.POST(requestFor("scan-receipt"));
@@ -484,7 +615,7 @@ function componentLifecycleHarness(reproduceOldCleanup = false) {
   };
   visit(component);
   assert.equal(overviewClicks.length, 1, "Use the real Overview shortcut callback");
-  const snippets = ["cancelAiRequests", "open", "close", "askAssistant", "resetDemo"].map(declaration).join("\n");
+  const snippets = ["invalidateVoicePreview", "cancelAiRequests", "open", "close", "askAssistant", "resetDemo"].map(declaration).join("\n");
   type Message = { role: string; text: string };
   const values: { modal: string | null; messages: Message[]; pendingAi: boolean; pendingScan: boolean; recording: boolean; error: string; [key: string]: unknown } = {
     modal: null, messages: [], pendingAi: false, pendingScan: false, recording: false, error: "", state: tenantState(), demoRevision: 0,
@@ -502,6 +633,7 @@ function componentLifecycleHarness(reproduceOldCleanup = false) {
   let cleanupCount = 0;
   const aiRequests = createRequestSlot(), scanRequests = createRequestSlot();
   const speech: { current: { stop: () => void } | null } = { current: null };
+  const voiceRevision = { current: 0 }, voiceConsumedGuard = { current: false };
   const tasks: Promise<void>[] = [];
   const calls: { signal: AbortSignal; body: ReturnType<typeof deferred<Record<string, unknown>>> }[] = [];
   const removedKeys: string[] = [];
@@ -520,7 +652,7 @@ function componentLifecycleHarness(reproduceOldCleanup = false) {
     return { open, close, askAssistant, resetDemo, overview: ${overviewClicks[0].getText(tree)} };
   })`, { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS } }).outputText;
   const createHandlers = runInNewContext(javascript, {
-    ...setters, aiRequests, scanRequests, speech, Error,
+    ...setters, aiRequests, scanRequests, speech, voiceRevision, voiceConsumedGuard, Error,
     useCallback: <T>(callback: T) => callback,
     useEffect: (setup: Effect["setup"], deps: Effect["deps"]) => { scheduled.push({ setup, deps }); },
     fetchAiJson: (url: string, init: RequestInit, signal: AbortSignal) => fetchAiJson(url, init, signal, fetcher),
@@ -595,9 +727,11 @@ test("close/reopen before commit rejects late answers and errors without clearin
     app.handlers.overview(); app.commit();
     const oldTask = app.handlers.askAssistant("Old request");
     const oldCall = app.calls[1];
+    app.values.parsed = { review: {} }; app.values.voiceDraft = { rows: [] }; app.values.voiceNotice = "Old preview";
     app.handlers.close();
     assert.equal(oldCall.signal.aborted, true);
     assert.equal(app.values.pendingAi, false);
+    assert.equal(app.values.parsed, null); assert.equal(app.values.voiceDraft, null); assert.equal(app.values.voiceNotice, "");
     app.handlers.overview(); // Reopen in the same event, before the next commit.
     const nextCall = app.calls[2];
     app.commit();
@@ -664,13 +798,17 @@ for (const boundary of ["account", "workspace", "mode", "unmount"] as const) {
     const scan = app.scanRequests.begin();
     let stopped = false;
     app.speech.current = { stop: () => { stopped = true; assert.equal(app.speech.current, null); } };
+    app.values.parsed = { review: {} }; app.values.voiceDraft = { rows: [] }; app.values.voiceConsumed = true;
     if (boundary === "unmount") app.unmount();
     else app.commit(boundary === "account" ? { user: { id: "user-b" } } : boundary === "workspace" ? { workspaceId: "workspace-b" } : { mode: "local" });
     assert.equal(app.calls[0].signal.aborted, true); assert.equal(scan.signal.aborted, true); assert.equal(stopped, true);
     app.calls[0].body.resolve({ answer: "Obsolete identity answer" });
     await app.settle();
     assert.equal(app.values.messages.length, 1); assert.equal(app.values.error, "");
-    if (boundary !== "unmount") assert.equal(app.values.pendingAi, false);
+    if (boundary !== "unmount") {
+      assert.equal(app.values.pendingAi, false); assert.equal(app.values.parsed, null);
+      assert.equal(app.values.voiceDraft, null); assert.equal(app.values.voiceConsumed, false);
+    }
   });
 }
 
@@ -704,12 +842,17 @@ test("component wiring guards results, cancels lifecycle requests, and leaves ma
     const end = source.indexOf("\n  }", start);
     const handler = source.slice(start, end);
     assert.match(handler, /fetchAiJson/);
-    assert.match(handler, /if \(!request\.canCommit\(\)\) return/);
-    assert.match(handler, /if \(!request\.isCurrent\(\)\) return/);
+    if (name === "handleVoiceParse") {
+      assert.match(handler, /if \(!request\.canCommit\(\) \|\| revision !== voiceRevision\.current\) return/);
+      assert.match(handler, /if \(!request\.isCurrent\(\) \|\| revision !== voiceRevision\.current\) return/);
+    } else {
+      assert.match(handler, /if \(!request\.canCommit\(\)\) return/);
+      assert.match(handler, /if \(!request\.isCurrent\(\)\) return/);
+    }
     assert.match(handler, /if \(request\.finish\(\)\) setPending/);
     assert.doesNotMatch(handler.slice(handler.indexOf("} catch")), /respondLocally|setParsed\(parseOrder|setPhotoName|setPurchaseItem|recordPurchase/);
   }
-  assert.match(source, /const close = useCallback\(\(\) => \{ cancelAiRequests\(\)/);
+  assert.match(source, /const close = useCallback\(\(\) => \{ cancelAiRequests\(\); invalidateVoicePreview\(\)/);
   assert.match(source, /return \(\) => \{\s*aiRequests\.cancel\(\); scanRequests\.cancel\(\)/);
   assert.match(source, /\[aiRequests, scanRequests, mode, workspaceId, user\?\.id\]/);
   assert.equal([...source.matchAll(/\bsetModal\(/g)].length, 2, "Only synchronous open/close may set the modal");
@@ -721,9 +864,22 @@ test("component wiring guards results, cancels lifecycle requests, and leaves ma
   const checkout = source.slice(source.indexOf("async function checkout("), source.indexOf("function downloadCsv("));
   assert.equal([...checkout.matchAll(/open\("receipt"\)/g)].length, 2, "Both checkout paths use synchronous cancellation");
   assert.match(source, /cancelPending: cancelAiRequests/);
+  assert.match(source, /const recognition = speech\.current; speech\.current = null; recognition\?\.stop\(\)/);
   assert.match(source, /if \(speech\.current !== recognition\) return/);
+  assert.match(source, /function replaceVoiceText\([\s\S]*?cancelAiRequests\(\); invalidateVoicePreview\(\)[\s\S]*?setVoiceText\(text\)/);
+  assert.match(source, /function startVoice\(\) \{[\s\S]*?cancelAiRequests\(\); invalidateVoicePreview\(\)/);
+  assert.match(source, /const result = validateVoiceOrderResponse\(data, products\);\s*setParsed\(result\); setVoiceDraft\(createVoiceOrderDraft\(result\.review, products\)\)/);
+  assert.match(source, /function confirmVoiceOrder\(\) \{\s*if \(voiceConsumedGuard\.current\) return;\s*voiceConsumedGuard\.current = true/);
+  assert.match(source, /validateVoiceOrderDraft\(parsed\.review, voiceDraft, products\)/);
+  assert.match(source, /mergeVoiceOrderDraft\(parsed\.review, voiceDraft, cart, products\)/);
+  assert.match(source, /unavailableCartProducts\(merged\.items, products, inventory, state\)/);
+  assert.match(source, /setCart\(merged\.items\); setPayment\(merged\.payment\)/);
   assert.match(source, /voiceNotice &&/);
   assert.match(source, /data\.source.*data\.notice/);
+  const preview = readFileSync(new URL("../components/voice-order-preview.tsx", import.meta.url), "utf8");
+  for (const action of ["Pilih menu", "Gunakan saran", "Hapus baris", "Metode pembayaran belum jelas", "Metode tidak disebutkan"]) assert.match(preview, new RegExp(action));
+  assert.match(preview, /review\.lines\.map/);
+  assert.match(preview, /onClick=\{\(\) => acceptProduct\(row, candidate\.productId\)\}/);
   for (const name of ["quantity", "total"]) {
     const field = source.match(new RegExp(`<input name="${name}"[^>]+>`));
     assert.ok(field); assert.doesNotMatch(field[0], /disabled/);

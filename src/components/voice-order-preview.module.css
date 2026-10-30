@@ -1,0 +1,535 @@
+.preview {
+  display: grid;
+  gap: 16px;
+  margin-top: 18px;
+  padding-top: 18px;
+  border-top: 1px solid var(--border);
+}
+
+.intro {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 18px;
+  padding: 2px 2px 0;
+}
+
+.intro h3 {
+  margin-top: 3px;
+  color: var(--foreground);
+  font-size: 18px;
+  font-weight: 760;
+  letter-spacing: -.025em;
+}
+
+.intro p {
+  max-width: 430px;
+  margin-top: 5px;
+  color: var(--text-secondary);
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+.eyebrow {
+  color: var(--green-copy);
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: .11em;
+}
+
+.counter {
+  flex-shrink: 0;
+  padding: 6px 9px;
+  border: 1px solid var(--green-soft);
+  border-radius: 999px;
+  background: var(--green-light);
+  color: var(--green-dark);
+  font-size: 10px;
+  font-weight: 750;
+}
+
+.timeline {
+  position: relative;
+  display: grid;
+  gap: 10px;
+}
+
+.timeline::before {
+  position: absolute;
+  top: 22px;
+  bottom: 22px;
+  left: 17px;
+  width: 1px;
+  background: var(--border);
+  content: "";
+}
+
+.row {
+  position: relative;
+  display: grid;
+  grid-template-columns: 36px minmax(0, 1fr);
+  gap: 10px;
+  animation: review-arrive 260ms ease both;
+}
+
+.row:nth-child(2) { animation-delay: 35ms; }
+.row:nth-child(3) { animation-delay: 70ms; }
+.row:nth-child(4) { animation-delay: 105ms; }
+
+.step {
+  z-index: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  margin-top: 14px;
+  border: 1px solid var(--border);
+  border-radius: 50%;
+  background: var(--surface);
+  color: var(--muted);
+  box-shadow: var(--shadow-xs);
+  font-size: 11px;
+  font-weight: 800;
+}
+
+.rowBody,
+.removedCopy,
+.problemRow > div {
+  min-width: 0;
+  padding: 15px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--surface-paper);
+}
+
+.acceptedRow .rowBody {
+  border-color: var(--green-soft);
+  background: linear-gradient(135deg, var(--surface) 58%, var(--green-light));
+}
+
+.unresolvedRow .rowBody,
+.problemRow > div {
+  border-color: var(--saffron-border);
+  box-shadow: inset 3px 0 0 var(--saffron);
+}
+
+.evidence,
+.rowFooter,
+.paymentHeading,
+.removedCopy {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.evidence > div,
+.removedCopy > div {
+  min-width: 0;
+}
+
+.status {
+  display: block;
+  margin-bottom: 4px;
+  color: var(--saffron-heading);
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: .04em;
+  text-transform: uppercase;
+}
+
+.status.exact {
+  color: var(--green-dark);
+}
+
+.evidence q,
+.removedCopy q,
+.problemRow q {
+  display: block;
+  color: var(--foreground);
+  font-size: 13px;
+  font-weight: 700;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
+.evidence q::before,
+.removedCopy q::before,
+.problemRow q::before { content: "“"; }
+.evidence q::after,
+.removedCopy q::after,
+.problemRow q::after { content: "”"; }
+
+.accepted,
+.needsAction,
+.paymentHeading > span {
+  display: inline-flex;
+  align-items: center;
+  flex-shrink: 0;
+  gap: 4px;
+  padding: 4px 7px;
+  border-radius: 999px;
+  font-size: 9px;
+  font-weight: 750;
+  white-space: nowrap;
+}
+
+.accepted,
+.paymentHeading > span {
+  background: var(--green-light);
+  color: var(--green-dark);
+}
+
+.needsAction {
+  background: var(--saffron-light);
+  color: var(--saffron-heading);
+}
+
+.explanation,
+.rowAlert,
+.blocker {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  color: var(--saffron-heading);
+  font-size: 11px;
+  line-height: 1.55;
+}
+
+.explanation {
+  margin-top: 10px;
+}
+
+.explanation svg,
+.rowAlert svg,
+.blocker svg {
+  flex-shrink: 0;
+  margin-top: 1px;
+}
+
+.candidates {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 7px;
+  margin-top: 12px;
+}
+
+.candidates > button {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-height: 48px;
+  padding: 8px 10px;
+  border: 1px solid var(--saffron-border);
+  border-radius: var(--radius-sm);
+  background: var(--saffron-light);
+  color: var(--saffron-heading);
+  text-align: left;
+}
+
+.candidates > button:hover:not(:disabled),
+.candidates > button[aria-pressed="true"] {
+  border-color: var(--green);
+  background: var(--green-light);
+  color: var(--green-dark);
+}
+
+.candidates > button:disabled {
+  opacity: .62;
+}
+
+.candidates strong,
+.candidates small {
+  display: block;
+}
+
+.candidates strong {
+  color: inherit;
+  font-size: 11px;
+}
+
+.candidates small {
+  margin-top: 2px;
+  font-size: 9px;
+  font-weight: 600;
+  opacity: .82;
+}
+
+.candidates .suggestionAction {
+  justify-content: center;
+  grid-column: 1 / -1;
+  min-height: 36px;
+  background: var(--surface);
+  font-size: 11px;
+  font-weight: 750;
+  text-align: center;
+}
+
+.editorGrid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto 88px;
+  align-items: end;
+  gap: 8px;
+  margin-top: 13px;
+  padding-top: 13px;
+  border-top: 1px dashed var(--border);
+}
+
+.editorGrid label {
+  display: grid;
+  gap: 5px;
+}
+
+.editorGrid label > span {
+  color: var(--text-secondary);
+  font-size: 10px;
+  font-weight: 700;
+}
+
+.editorGrid input,
+.editorGrid select {
+  width: 100%;
+  min-height: 38px;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-xs);
+  background: var(--surface);
+  color: var(--foreground);
+  font-size: 12px;
+}
+
+.editorGrid input:focus,
+.editorGrid select:focus {
+  border-color: var(--green);
+  outline: 3px solid var(--green-light);
+}
+
+.menuField {
+  min-width: 0;
+}
+
+.noteField {
+  grid-column: 1 / -1;
+}
+
+.rowFooter {
+  align-items: center;
+  margin-top: 10px;
+  color: var(--text-secondary);
+  font-size: 10px;
+}
+
+.rowFooter strong {
+  color: var(--foreground);
+}
+
+.removeButton {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  min-height: 32px;
+  padding: 5px 7px;
+  border-radius: var(--radius-xs);
+  background: transparent;
+  color: var(--red-dark);
+  font-size: 10px;
+  font-weight: 700;
+}
+
+.removeButton:hover {
+  background: var(--red-light);
+}
+
+.rowAlert {
+  margin-top: 9px;
+  padding: 8px 9px;
+  border: 1px solid var(--saffron-border);
+  border-radius: var(--radius-xs);
+  background: var(--saffron-light);
+}
+
+.removedRow {
+  opacity: .76;
+}
+
+.removedCopy {
+  align-items: center;
+  background: var(--surface-muted);
+}
+
+.removedCopy q {
+  color: var(--muted);
+  text-decoration: line-through;
+}
+
+.problemRow p {
+  margin-top: 5px;
+  color: var(--red-dark);
+  font-size: 11px;
+}
+
+.payment {
+  margin: 2px 0 0;
+  padding: 15px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--surface);
+}
+
+.paymentUnresolved {
+  border-color: var(--saffron-border);
+  box-shadow: inset 3px 0 0 var(--saffron);
+}
+
+.paymentAccepted {
+  border-color: var(--green-soft);
+}
+
+.payment legend {
+  padding: 0 6px;
+  color: var(--foreground);
+  font-size: 11px;
+  font-weight: 800;
+}
+
+.paymentHeading strong {
+  color: var(--foreground);
+  font-size: 12px;
+}
+
+.paymentHeading p {
+  margin-top: 3px;
+  color: var(--text-secondary);
+  font-size: 10px;
+  line-height: 1.5;
+}
+
+.paymentOptions {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 7px;
+  margin-top: 12px;
+}
+
+.paymentOptions button {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  min-height: 48px;
+  padding: 7px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface-muted);
+  color: var(--text-secondary);
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.paymentOptions button[aria-pressed="true"] {
+  border-color: var(--green);
+  background: var(--green-light);
+  color: var(--green-dark);
+}
+
+.paymentOptions button.paymentSuggestion {
+  border-color: var(--saffron);
+  background: var(--saffron-light);
+  color: var(--saffron-heading);
+}
+
+.paymentOptions small {
+  display: block;
+  font-size: 8px;
+  font-weight: 600;
+}
+
+.conflict {
+  display: flex;
+  align-items: flex-start;
+  gap: 9px;
+  padding: 12px;
+  border: 1px solid var(--saffron-border);
+  border-radius: var(--radius-sm);
+  background: var(--saffron-light);
+  color: var(--saffron-heading);
+}
+
+.conflict > svg {
+  flex-shrink: 0;
+  margin-top: 1px;
+}
+
+.conflict strong {
+  font-size: 11px;
+}
+
+.conflict p {
+  margin-top: 3px;
+  font-size: 10px;
+  line-height: 1.55;
+}
+
+.conflict button {
+  min-height: 32px;
+  margin-top: 7px;
+  padding: 5px 8px;
+  border: 1px solid var(--saffron-border);
+  border-radius: var(--radius-xs);
+  background: var(--surface);
+  color: var(--saffron-heading);
+  font-size: 10px;
+  font-weight: 750;
+}
+
+.confirmArea {
+  display: grid;
+  gap: 8px;
+  position: sticky;
+  bottom: -24px;
+  z-index: 2;
+  margin: 0 -2px -2px;
+  padding: 12px 2px 2px;
+  background: linear-gradient(transparent, var(--surface) 24%);
+}
+
+.confirmArea small {
+  color: var(--text-secondary);
+  font-size: 9px;
+  line-height: 1.5;
+  text-align: center;
+}
+
+.blocker {
+  justify-content: center;
+  color: var(--red-dark);
+  text-align: center;
+}
+
+@keyframes review-arrive {
+  from { opacity: 0; transform: translateY(5px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+@media (max-width: 560px) {
+  .intro { gap: 10px; }
+  .intro h3 { font-size: 16px; }
+  .evidence { align-items: flex-start; }
+  .accepted, .needsAction { padding: 4px; }
+  .accepted svg, .needsAction svg { display: none; }
+  .candidates { grid-template-columns: 1fr; }
+  .candidates .suggestionAction { grid-column: auto; }
+  .editorGrid { grid-template-columns: minmax(0, 1fr) auto; }
+  .editorGrid > label:nth-of-type(2) { grid-column: 1 / 2; }
+  .noteField { grid-column: 1 / -1; }
+  .paymentOptions { grid-template-columns: 1fr; }
+  .paymentOptions button { justify-content: flex-start; padding-inline: 12px; }
+  .paymentOptions button > svg:last-child { margin-left: auto; }
+  .removedCopy { align-items: flex-start; flex-direction: column; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .row { animation: none; }
+}

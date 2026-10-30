@@ -1,3 +1,5 @@
+import { parseVoiceOrder } from "./voice-order.ts";
+
 export const DEMO_DATE = "2026-10-18";
 
 export interface Product {
@@ -536,73 +538,9 @@ export function createInitialState(endDate: string = DEMO_DATE): BusinessState {
   };
 }
 
-const numberWords: Record<string, number> = {
-  satu: 1, dua: 2, tiga: 3, empat: 4, lima: 5, enam: 6, tujuh: 7, delapan: 8, sembilan: 9, sepuluh: 10,
-};
-const demoMenuAliases: Record<string, string> = {
-  "es kopi susu gula aren": "kopi-susu", "es kopi susu": "kopi-susu", "kopi susu": "kopi-susu", "es kopsu": "kopi-susu", kopsu: "kopi-susu",
-  "butter croissant": "croissant", croissant: "croissant", "matcha latte": "matcha", "es matcha": "matcha", matcha: "matcha",
-  "es americano": "americano", americano: "americano", "es amer": "americano", amer: "americano",
-  "pain au chocolat": "pain-chocolat", "pain chocolat": "pain-chocolat", "pain-chocolat": "pain-chocolat", "roti cokelat": "pain-chocolat", "cokelat pastry": "pain-chocolat",
-  "cinnamon roll": "cinnamon", cinnamon: "cinnamon", "roti kayu manis": "cinnamon", cappuccino: "cappuccino", kapucino: "cappuccino",
-  "iced chocolate": "chocolate", "es cokelat": "chocolate", "es coklat": "chocolate", chocolate: "chocolate", cokelat: "chocolate", coklat: "chocolate",
-  "es teh melati": "tea", "teh melati": "tea", "iced tea": "tea", "es teh manis": "tea", "teh manis": "tea", "es teh": "tea", tea: "tea", teh: "tea",
-};
-const quantityPattern = `(?:\\d+|${Object.keys(numberWords).join("|")})`;
-const notePattern = "(?:less sugar|kurang gula|gula sedikit|sedikit gula|tanpa gula|less ice|sedikit es|tanpa es)";
-
-function createOrderParser(catalog: Product[]) {
-  const available = catalog.filter((product) => product.active !== false);
-  const availableIds = new Set(available.map((product) => product.id));
-  const aliases: Record<string, string> = {};
-  for (const [alias, id] of Object.entries(demoMenuAliases)) if (availableIds.has(id)) aliases[alias] = id;
-  for (const product of available) {
-    for (const alias of [product.id, product.id.replace(/-/g, " "), product.name.toLowerCase().trim().replace(/\s+/g, " ")]) {
-      if (alias) aliases[alias] = product.id;
-    }
-  }
-  const aliasPattern = Object.keys(aliases).sort((a, b) => b.length - a.length).map((alias) => alias.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("|");
-  const orderPattern = aliasPattern ? new RegExp(`^(?:(${quantityPattern})\\s+(?:(?:gelas|cup|pcs|buah|porsi|piring)\\s+)?)?(${aliasPattern})(?:\\s+(${quantityPattern}))?((?:\\s+${notePattern})*)$`) : null;
-  return { aliases, orderPattern };
-}
-
+/** Legacy three-field projection. Review-aware consumers use parseVoiceOrder instead. */
 export function parseOrder(text: string, catalog: Product[] = products): { items: CartItem[]; payment: Sale["payment"]; unknown: string[] } {
-  const { aliases, orderPattern } = createOrderParser(catalog);
-  const items: CartItem[] = [];
-  const unknown: string[] = [];
-  let payment: Sale["payment"] = "Tunai";
-  let paymentSeen = false;
-  const normalized = text.toLowerCase().trim().replace(/\.(?=\s|$)/g, ";");
-  const clauses = normalized.split(/[,;\n]+|\s+(?:dan|&|\+)\s+/).map((clause) => clause.trim().replace(/\s+/g, " ")).filter(Boolean);
-  for (let clause of clauses) {
-    const original = clause;
-    clause = clause.replace(/^(?:tolong\s+)?(?:(?:saya\s+)?(?:mau\s+)?(?:pesan|beli)|saya mau|mau)\s+|^tolong\s+/, "");
-    const paymentMatch = clause.match(/(?:^|\s+)(?:(?:bayar|pembayaran)(?:\s+(?:pakai|dengan))?\s+|(?:pakai|via|dengan)\s+)?(qris|tunai|cash|transfer)$/);
-    if (paymentMatch) {
-      const selected: Sale["payment"] = paymentMatch[1] === "qris" ? "QRIS" : paymentMatch[1] === "transfer" ? "Transfer" : "Tunai";
-      if (paymentSeen && payment !== selected) {
-        unknown.push(original);
-        continue;
-      }
-      payment = selected;
-      paymentSeen = true;
-      clause = clause.slice(0, paymentMatch.index).trim();
-      if (!clause) continue;
-    }
-    const match = orderPattern ? clause.match(orderPattern) : null;
-    if (!match || (match[1] && match[3])) {
-      unknown.push(original);
-      continue;
-    }
-    const quantityToken = match[1] ?? match[3] ?? "1";
-    const quantity = numberWords[quantityToken] ?? Number(quantityToken);
-    if (!Number.isSafeInteger(quantity) || quantity <= 0) {
-      unknown.push(original);
-      continue;
-    }
-    const notes = match[4].trim().replace(/kurang gula|gula sedikit|sedikit gula/g, "less sugar");
-    items.push({ productId: aliases[match[2]], quantity, ...(notes ? { note: notes } : {}) });
-  }
+  const { items, payment, unknown } = parseVoiceOrder(text, catalog);
   return { items, payment, unknown };
 }
 

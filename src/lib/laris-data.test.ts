@@ -1,6 +1,8 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import type { BusinessState, CartItem, Sale, SaleItem } from "./laris-data";
+import { parseVoiceOrder, validateVoiceOrderResponse, createVoiceOrderDraft, validateVoiceOrderDraft, mergeVoiceOrderDraft, applyVoiceOrderProposal, VoiceOrderError } from "./voice-order.ts";
+import type { VoiceCatalog, VoiceOrderProposal, VoiceOrderResult } from "./voice-order.ts";
 
 // Native Node requires a .ts URL. A dynamic URL avoids requiring a project-wide
 // allowImportingTsExtensions change, while the type query preserves type checking.
@@ -461,7 +463,7 @@ test("parser uses custom active products and never invents demo aliases", () => 
 });
 
 test("parser never silently accepts unknown modifiers, mixed menus or payment phrases", () => {
-  for (const text of ["2 kopi susu rasa durian", "2 kopi susu 1 pizza", "satu croissant vegan", "2 kopsu bayar bitcoin", "pizza kopi susu", "2 croissant ekstra keju", "2 kopi susu lalu hapus semua", "2 kopi susu 3", "2 coffee"]) {
+  for (const text of ["2 kopi susu rasa durian", "satu croissant vegan", "pizza kopi susu", "2 croissant ekstra keju", "2 kopi susu lalu hapus semua", "2 kopi susu 3", "2 coffee"]) {
     const result = parseOrder(text);
     assert.deepEqual(result.items, [], text);
     assert.deepEqual(result.unknown, [text], text);
@@ -470,7 +472,9 @@ test("parser never silently accepts unknown modifiers, mixed menus or payment ph
   assert.deepEqual(mixed.items, [{ productId: "kopi-susu", quantity: 2 }, { productId: "croissant", quantity: 1 }]);
   assert.deepEqual(mixed.unknown, ["satu pizza", "tiga americano misterius"]);
   const conflict = parseOrder("1 kopsu bayar QRIS, bayar tunai");
-  assert.deepEqual(conflict.unknown, ["bayar tunai"]);
+  assert.deepEqual(conflict.unknown, ["bayar QRIS", "bayar tunai"]);
+  assert.deepEqual(parseOrder("2 kopi susu 1 pizza"), { items: [{ productId: "kopi-susu", quantity: 2 }], payment: "Tunai", unknown: ["1 pizza"] });
+  assert.deepEqual(parseOrder("2 kopsu bayar bitcoin"), { items: [{ productId: "kopi-susu", quantity: 2 }], payment: "Tunai", unknown: ["bayar bitcoin"] });
 });
 
 for (const quantity of ["0", "-1", "1.5", "1e2", "Infinity", "NaN", "9007199254740992"]) {
@@ -480,6 +484,243 @@ for (const quantity of ["0", "-1", "1.5", "1e2", "Infinity", "NaN", "90071992547
     assert.equal(result.unknown.length, 1);
   });
 }
+
+// Voice evidence and editable draft contract. Execution belongs to independent verification.
+const originalVoice = "2 es kopi susu 1 Americano 1 butter crossan bayar kiri";
+function voiceProposal(result: VoiceOrderResult): VoiceOrderProposal {
+  return { lines: result.review.lines.map(line => ({ sourceId: line.id, raw: line.raw, quantity: line.quantity, productId: line.productId ?? null, ...(line.note ? { note: line.note } : {}) })), payment: { method: result.review.payment.method, raw: [...result.review.payment.raw] } };
+}
+
+test("original transcript keeps exact quantities and requires croissant and payment acceptance", () => {
+  const result = parseVoiceOrder(originalVoice, products);
+  assert.deepEqual(result.items, [{ productId: "kopi-susu", quantity: 2 }, { productId: "americano", quantity: 1 }]);
+  assert.deepEqual(result.review.lines.map(line => [line.id, line.quantity]), [["line-1", 2], ["line-2", 1], ["line-3", 1]]);
+  assert.deepEqual(result.review.lines.slice(0, 2).map(line => line.status), ["exact", "exact"]);
+  assert.notEqual(result.review.lines[2].status, "exact");
+  assert.equal(result.review.lines[2].candidates[0].productId, "croissant");
+  assert.deepEqual(result.review.payment, { status: "unclear", method: null, raw: ["bayar kiri"] });
+  assert.deepEqual(result.unknown, ["1 butter crossan", "bayar kiri"]);
+  assert.equal(result.payment, "Tunai", "legacy placeholder is not payment acceptance");
+  assert.deepEqual(Object.keys(parseOrder(originalVoice)).sort(), ["items", "payment", "unknown"]);
+  assert.deepEqual(validateVoiceOrderResponse(result, products), result);
+  const draft = createVoiceOrderDraft(result.review, products);
+  assert.equal(draft.payment, null); assert.equal(draft.paymentAccepted, false);
+  assert.equal(draft.rows[2].accepted, false);
+  draft.payment = "QRIS"; draft.paymentAccepted = true;
+  assert.equal(validateVoiceOrderDraft(result.review, draft, products).ok, false, "payment choice cannot resolve the menu");
+  draft.rows[2].productId = "croissant"; draft.rows[2].accepted = true;
+  assert.equal(validateVoiceOrderDraft(result.review, draft, products).ok, true);
+});
+
+test("corrected comma-free transcript, polite prefixes, aliases and original raw evidence survive", () => {
+  const result = parseVoiceOrder("Tolong saya mau pesan 2 es kopsu less sugar 1 Americano 1 butter croissant bayar QRIS", products);
+  assert.deepEqual(result.items, [{ productId: "kopi-susu", quantity: 2, note: "less sugar" }, { productId: "americano", quantity: 1 }, { productId: "croissant", quantity: 1 }]);
+  assert.deepEqual(result.unknown, []);
+  assert.match(result.review.lines[0].raw, /^Tolong saya mau pesan/);
+  assert.equal(result.review.lines[1].raw, "1 Americano");
+  assert.deepEqual(parseVoiceOrder("2 pizza 1 kopsu 3 burger", products).unknown, ["2 pizza", "3 burger"]);
+});
+
+test("Indonesian quantities through 999 and shorthand never use a default for invalid expressions", () => {
+  for (const [word, expected] of [["sebelas", 11], ["dua belas", 12], ["dua puluh satu", 21], ["seratus", 100], ["seratus sebelas", 111], ["dua ratus tiga puluh empat", 234], ["sembilan ratus sembilan puluh sembilan", 999], ["sepasang", 2], ["selusin", 12], ["lusin", 12], ["dua lusin", 24], ["segelas", 1], ["999", 999]] as const) {
+    assert.deepEqual(parseVoiceOrder(`${word} kopsu`, products).items, [{ productId: "kopi-susu", quantity: expected }], word);
+  }
+  for (const word of ["0", "-2", "−2", "+2", "1.5", "1,5", ".5", "1e2", "1e+2", "1000", "9007199254740992", "seribu", "satu juta", "setengah", "dua koma lima", "dua tiga", "NaN", "Infinity"]) {
+    const result = parseVoiceOrder(`${word} kopsu`, products);
+    assert.deepEqual(result.items, [], word);
+    assert.equal(result.review.lines.length, 1, word);
+    assert.equal(result.review.lines[0].issue, "quantity", word);
+    assert.equal(result.review.lines[0].quantity, null, word);
+    assert.deepEqual(result.unknown, [`${word} kopsu`], word);
+  }
+  const mixed = parseVoiceOrder("1,5 kopsu, 2 americano", products);
+  assert.equal(mixed.review.lines[0].status, "invalid");
+  assert.deepEqual(mixed.items, [{ productId: "americano", quantity: 2 }]);
+});
+
+test("numeric catalogue names win before quantities; uncertain postfix boundaries never guess", () => {
+  const catalog: VoiceCatalog = [{ id: "seven", name: "7 Up" }, { id: "coffee-two", name: "Kopi 2" }, { id: "vitamin", name: "Vitamin C 1000" }, ...products];
+  assert.deepEqual(parseVoiceOrder("2 7 Up 1 Kopi 2 3 Vitamin C 1000", catalog).items, [{ productId: "seven", quantity: 2 }, { productId: "coffee-two", quantity: 1 }, { productId: "vitamin", quantity: 3 }]);
+  assert.deepEqual(parseVoiceOrder("7 Up", catalog).items, [{ productId: "seven", quantity: 1 }]);
+  assert.deepEqual(parseVoiceOrder("kopsu dua puluh satu; americano 2 less sugar", catalog).items, [{ productId: "kopi-susu", quantity: 21 }, { productId: "americano", quantity: 2, note: "less sugar" }]);
+  for (const text of ["kopsu 2 americano", "2 kopsu 3", "kopsu 2 americano 1"]) {
+    const result = parseVoiceOrder(text, catalog);
+    assert.deepEqual(result.items, [], text);
+    assert.equal(result.review.lines[0].issue, "boundary", text);
+  }
+  assert.deepEqual(parseVoiceOrder("1 Vitamin C 1001", catalog).review.lines[0].candidates, []);
+});
+
+test("unknown modifiers, token changes and weak matches never silently substitute a menu", () => {
+  for (const text of ["2 es kopi susu durian", "2 kopsu tambah es", "1 butter crossan vegan", "1 iced chocolate vegan", "1 xs kopi susu", "1 coffzzzz", "1 kopi 9"]) {
+    const result = parseVoiceOrder(text, products);
+    assert.deepEqual(result.items, [], text);
+    assert.ok(result.unknown.length, text);
+    assert.equal(result.review.lines[0].candidates.length, 0, text);
+  }
+  const transposed = parseVoiceOrder("1 americnao", products);
+  assert.equal(transposed.review.lines[0].status, "ambiguous", "one transposition in a nine-letter word is below 0.90");
+  assert.equal(transposed.review.lines[0].candidates[0].method, "spelling");
+  assert.deepEqual(transposed.items, []);
+  const close = parseVoiceOrder("1 cokelatx", [{ id: "a", name: "Cokelata" }, { id: "b", name: "Cokelati" }]);
+  assert.equal(close.review.lines[0].status, "ambiguous");
+  assert.deepEqual(close.review.lines[0].candidates.map(candidate => candidate.productId), ["a", "b"]);
+});
+
+test("alias collisions remain choices, inactive exact names never fall through to fuzzy", () => {
+  const catalog: VoiceCatalog = [{ id: "a", name: "House Coffee", aliases: ["shared"] }, { id: "b", name: "Shared", aliases: ["shared"] }];
+  const collision = parseVoiceOrder("2 shared", catalog);
+  assert.equal(collision.review.lines[0].status, "ambiguous");
+  assert.equal(collision.review.lines[0].candidates.length, 2);
+  assert.deepEqual(collision.items, []);
+  const inactive = parseVoiceOrder("1 shared", [{ ...catalog[0], active: false }, { id: "near", name: "Sharedd" }]);
+  assert.equal(inactive.review.lines[0].issue, "unavailable");
+  assert.deepEqual(inactive.review.lines[0].candidates, []);
+  const renamed = parseVoiceOrder("kopsu", [{ id: "kopi-susu", name: "Completely Different" }]);
+  assert.deepEqual(renamed.items, []);
+  assert.throws(() => parseVoiceOrder("shared", [catalog[0], catalog[0]]), VoiceOrderError);
+  const many = parseVoiceOrder("shared", Array.from({ length: 5 }, (_, i) => ({ id: `choice-${i}`, name: "Shared" })));
+  assert.equal(many.review.lines[0].candidates.length, 3);
+});
+
+test("payment evidence separates unspecified, repeated explicit, unknown and conflicting methods", () => {
+  const cases = [
+    ["1 kopsu", "unspecified", "Tunai"], ["1 kopsu cash", "explicit", "Tunai"],
+    ["1 kopsu bayar QRIS bayar QRIS", "explicit", "QRIS"], ["1 kopsu bayar dengan transfer", "explicit", "Transfer"],
+    ["1 kopsu bayar kiri", "unclear", null], ["1 kopsu bayar", "unclear", null],
+    ["1 kopsu bayar bitcoin, bayar QRIS", "unclear", null], ["1 kopsu bayar QRIS, bayar tunai", "conflicting", null],
+    ["1 kopsu bayar qris transfer", "conflicting", null],
+  ] as const;
+  for (const [text, status, method] of cases) {
+    const result = parseVoiceOrder(text, products);
+    assert.equal(result.review.payment.status, status, text); assert.equal(result.review.payment.method, method, text);
+    assert.deepEqual(validateVoiceOrderResponse(result, products), result);
+    const draft = createVoiceOrderDraft(result.review, products);
+    assert.equal(draft.paymentAccepted, status === "explicit" || status === "unspecified", text);
+  }
+  const paymentMenu = [{ id: "pay", name: "Bayar Latte" }];
+  assert.deepEqual(parseVoiceOrder("1 Bayar Latte", paymentMenu).items, [{ productId: "pay", quantity: 1 }]);
+});
+
+test("parser limits fail without truncation, including repeated occurrence evidence", () => {
+  assert.throws(() => parseVoiceOrder("a".repeat(2001), products), error => error instanceof VoiceOrderError && error.code === "text-limit");
+  assert.throws(() => parseVoiceOrder(Array(51).fill("1 kopsu").join(" "), products), error => error instanceof VoiceOrderError && error.code === "line-limit");
+  const result = parseVoiceOrder(Array(50).fill("1 kopsu").join(" "), products);
+  assert.equal(result.items.length, 50); assert.equal(new Set(result.review.lines.map(line => line.id)).size, 50);
+  assert.deepEqual(parseVoiceOrder("pizza, pizza", products).unknown, ["pizza", "pizza"]);
+});
+
+test("network response validator rejects malformed nested evidence and projection bypasses", () => {
+  const base = parseVoiceOrder(originalVoice, products);
+  const mutations: ((copy: VoiceOrderResult) => void)[] = [
+    copy => { (copy.review as unknown as { version: number }).version = 2; },
+    copy => { (copy.review.lines[1] as { id: string }).id = copy.review.lines[0].id; },
+    copy => { (copy.review.lines[0] as { quantity: number }).quantity = 0; },
+    copy => { (copy.review.lines[0] as { productId: string }).productId = "missing"; },
+    copy => { (copy.review.lines[2].candidates[0] as { score: number }).score = 0.74; },
+    copy => { (copy.review.lines[2].candidates[0] as { score: number }).score = NaN; },
+    copy => { (copy.review.lines[2].candidates as unknown[]).push(copy.review.lines[2].candidates[0]); },
+    copy => { (copy.review.payment as { method: unknown }).method = "Tunai"; },
+    copy => { (copy.review.payment as { status: string }).status = "explicit"; },
+    copy => { copy.review = { ...copy.review, payment: { ...copy.review.payment, suggestedMethods: ["QRIS", "QRIS"] } }; },
+    copy => { copy.items.push({ productId: "croissant", quantity: 1 }); },
+    copy => { copy.unknown.pop(); },
+  ];
+  for (const mutate of mutations) {
+    const copy: VoiceOrderResult = JSON.parse(JSON.stringify(base)); mutate(copy);
+    assert.throws(() => validateVoiceOrderResponse(copy, products), VoiceOrderError);
+  }
+  assert.throws(() => validateVoiceOrderResponse(base, products.map(product => product.id === "croissant" ? { ...product, active: false } : product)), VoiceOrderError);
+  const explicit = JSON.parse(JSON.stringify(parseVoiceOrder("1 kopsu bayar qris", products)));
+  explicit.review.payment.method = "Tunai"; explicit.payment = "Tunai";
+  assert.throws(() => validateVoiceOrderResponse(explicit, products), VoiceOrderError);
+});
+
+test("legacy responses are suggestions only, including payment and duplicate unknowns", () => {
+  const result = validateVoiceOrderResponse({ items: [{ productId: "kopi-susu", quantity: 2 }], payment: "QRIS", unknown: ["pizza", "pizza"] }, products);
+  assert.deepEqual(result.items, []); assert.equal(result.review.lines.length, 3);
+  assert.equal(result.review.lines[0].status, "suggested");
+  const draft = createVoiceOrderDraft(result.review, products);
+  assert.equal(draft.rows[0].accepted, false); assert.equal(draft.payment, null);
+  assert.equal(validateVoiceOrderDraft(result.review, draft, products).ok, false);
+  assert.throws(() => validateVoiceOrderResponse({ items: [{ productId: "missing", quantity: 1 }], payment: "QRIS", unknown: [] }, products), VoiceOrderError);
+});
+
+test("draft keeps immutable evidence, occurrence IDs and unresolved/removal boundaries", () => {
+  const result = parseVoiceOrder("1 kopsu 2 kopsu 1 pizza bayar kiri", products);
+  const before = JSON.stringify(result.review);
+  const draft = createVoiceOrderDraft(result.review, products);
+  assert.ok(Object.isFrozen(result.review.lines[0])); assert.ok(Object.isFrozen(result.review.payment.raw));
+  draft.rows[0].quantity = 3;
+  assert.equal(JSON.stringify(result.review), before);
+  draft.rows[2].removed = true; draft.payment = "QRIS"; draft.paymentAccepted = true;
+  assert.deepEqual(validateVoiceOrderDraft(result.review, draft, products), { ok: true, items: [{ productId: "kopi-susu", quantity: 5 }], payment: "QRIS" });
+  const duplicate = structuredClone(draft); duplicate.rows[1].id = duplicate.rows[0].id;
+  assert.equal(validateVoiceOrderDraft(result.review, duplicate, products).ok, false);
+  const missing = structuredClone(draft); missing.rows.pop();
+  assert.equal(validateVoiceOrderDraft(result.review, missing, products).ok, false);
+  draft.rows.forEach(row => { row.removed = true; });
+  assert.equal(validateVoiceOrderDraft(result.review, draft, products).ok, false);
+});
+
+test("safe merge revalidates quantity, availability, notes and combined cart bounds atomically", () => {
+  const result = parseVoiceOrder("1 kopsu 2 kopsu", products);
+  const draft = createVoiceOrderDraft(result.review, products);
+  const cart = freezeDeep([{ productId: "kopi-susu", quantity: 3 }]);
+  assert.deepEqual(mergeVoiceOrderDraft(result.review, draft, cart, products), { ok: true, items: [{ productId: "kopi-susu", quantity: 6 }], payment: "Tunai" });
+  assert.equal(cart[0].quantity, 3);
+  for (const quantity of [0, -1, 1.5, 1000, NaN, Infinity, "2" as unknown as number]) {
+    const invalid = structuredClone(draft); invalid.rows[0].quantity = quantity;
+    assert.equal(validateVoiceOrderDraft(result.review, invalid, products).ok, false);
+  }
+  assert.equal(mergeVoiceOrderDraft(result.review, draft, [{ productId: "kopi-susu", quantity: 997 }], products).ok, false);
+  assert.equal(mergeVoiceOrderDraft(result.review, draft, [{ productId: "kopi-susu", quantity: 996 }], products).ok, true);
+  draft.rows[0].note = "less sugar";
+  const notes = validateVoiceOrderDraft(result.review, draft, products);
+  assert.equal(notes.ok, false); if (!notes.ok) assert.ok(notes.issues.some(issue => issue.code === "note-conflict"));
+  draft.rows[1].note = "less sugar";
+  const existing = mergeVoiceOrderDraft(result.review, draft, cart, products);
+  assert.equal(existing.ok, false); if (!existing.ok) assert.equal(existing.issues[0].existingNote, "");
+  assert.equal(mergeVoiceOrderDraft(result.review, draft, [{ productId: "kopi-susu", quantity: 3, note: "less sugar" }], products).ok, true);
+  assert.equal(validateVoiceOrderDraft(result.review, draft, products.map(product => ({ ...product, active: false }))).ok, false);
+  draft.rows[0].note = "x".repeat(201);
+  assert.equal(validateVoiceOrderDraft(result.review, draft, products).ok, false);
+});
+
+test("cloud overlays preserve source IDs, quantities, unmatched fragments and explicit acceptance", () => {
+  const local = parseVoiceOrder("2 kopsu 1 mystery 1 pizza bayar kiri", products);
+  const proposal = voiceProposal(local);
+  proposal.lines[1].productId = "americano"; proposal.lines[1].quantity = 99;
+  proposal.payment.method = "QRIS";
+  const result = applyVoiceOrderProposal(local.review, proposal, products);
+  assert.deepEqual(result.items, local.items);
+  assert.deepEqual(result.review.lines.map(line => line.raw), local.review.lines.map(line => line.raw));
+  assert.equal(result.review.lines[1].quantity, 1); assert.equal(result.review.lines[1].issue, "quantity");
+  assert.equal(result.review.lines[1].candidates[0].method, "ai");
+  assert.deepEqual(result.unknown, ["1 mystery", "1 pizza", "bayar kiri"]);
+  assert.equal(createVoiceOrderDraft(result.review, products).rows[1].accepted, false);
+  assert.equal(result.review.payment.method, null);
+  const exactConflict = voiceProposal(local); exactConflict.lines[0].quantity = 3;
+  const conflicted = applyVoiceOrderProposal(local.review, exactConflict, products);
+  assert.equal(conflicted.review.lines[0].quantity, 2); assert.equal(conflicted.review.lines[0].issue, "quantity");
+  assert.deepEqual(conflicted.items, []);
+});
+
+test("malformed cloud refs, raw text, catalogue IDs and quantities fail closed", () => {
+  const local = parseVoiceOrder("2 kopsu 1 pizza bayar qris", products);
+  const mutations: ((proposal: VoiceOrderProposal) => void)[] = [
+    proposal => { proposal.lines.pop(); }, proposal => { proposal.lines[1].sourceId = proposal.lines[0].sourceId; },
+    proposal => { proposal.lines[1].sourceId = "invented"; }, proposal => { proposal.lines[0].productId = "missing"; },
+    proposal => { proposal.lines[0].raw = "rewritten"; }, proposal => { proposal.lines[0].quantity = 1.5; },
+    proposal => { proposal.payment.raw = []; }, proposal => { proposal.lines[0].note = "x".repeat(201); },
+  ];
+  for (const mutate of mutations) { const proposal = voiceProposal(local); mutate(proposal); assert.throws(() => applyVoiceOrderProposal(local.review, proposal, products), error => error instanceof VoiceOrderError && error.code === "invalid-proposal"); }
+  const audio = applyVoiceOrderProposal(null, { lines: [{ sourceId: "a", raw: "dua kopsu", quantity: 2, productId: "kopi-susu" }, { sourceId: "b", raw: "pizza", quantity: 1, productId: null }], payment: { method: "QRIS", raw: ["bayar qris"] } }, products);
+  assert.deepEqual(audio.items, []); assert.equal(audio.review.payment.method, null);
+  assert.deepEqual(audio.review.lines.map(line => line.id), ["a", "b"], "audio source IDs remain stable through review");
+  assert.equal(audio.review.lines[0].status, "suggested"); assert.equal(audio.review.lines[1].status, "unknown");
+  assert.equal(validateVoiceOrderDraft(audio.review, createVoiceOrderDraft(audio.review, products), products).ok, false);
+});
 
 test("CSV round-trips commas, quotes, newlines, rupiah and menu notes", () => {
   const { state, sale } = completeSale(emptyState(), {

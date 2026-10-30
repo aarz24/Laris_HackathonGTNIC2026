@@ -1,4 +1,5 @@
-import { currency, getStock, getSalesFinancials, getProductSales, parseOrder, type BusinessState } from "./laris-data.ts";
+import { currency, getStock, getSalesFinancials, getProductSales, type BusinessState } from "./laris-data.ts";
+import { parseVoiceOrder } from "./voice-order.ts";
 
 export type AiFallbackReason = "timeout" | "provider-error" | "unavailable";
 export const AI_RULES_SCOPE = "Cakupan: seluruh transaksi tercatat, bukan khusus hari ini. Stok memakai kondisi saat ini.";
@@ -49,11 +50,11 @@ export function parseOrderFallback(text: string, state: BusinessState, reason: A
     status: reason === "timeout" ? 504 : reason === "unavailable" ? 503 : 502,
     body: { error: "Audio belum dapat diproses. Ketik pesanan atau masukkan item secara manual; tidak ada transkrip yang dibuat.", code: reason === "timeout" ? "AI_TIMEOUT" : "AI_AUDIO_REQUIRES_TEXT", reason },
   };
-  const catalog = (state.products ?? []).filter(product => product.active !== false);
+  const catalog = state.products ?? [];
   return {
     status: 200,
     body: {
-      ...parseOrder(text, catalog), source: "fallback-parser", reason,
+      ...parseVoiceOrder(text, catalog), source: "fallback-parser", reason,
       notice: reason === "timeout" ? "Batas waktu AI tercapai. Pesanan diurai dari teks dengan katalog aktif workspace, bukan hasil model AI. Periksa sebelum konfirmasi." : "AI tidak tersedia. Pesanan diurai dari teks dengan katalog aktif workspace, bukan hasil model AI. Periksa sebelum konfirmasi.",
     },
   };

@@ -1,0 +1,32 @@
+LARIS - SUBMISSION CHECKLIST (not part of the proposal)
+Deadline: November 10, 2026, 23:59 WIB. Source: guidebook, page 10.
+
+The generated proposal is a DRAFT until the following are completed:
+1. Replace the team name and member/institution/student-ID placeholders.
+   Remove unused member rows for an individual or two-person entry.
+2. Supply the public HTTPS website and public 3-5 minute video URLs.
+3. Supply dedicated fictional-data judge accounts for owner, manager, kasir,
+   and dapur in the submission copy; verify permissions and email journeys.
+   Never publish service-role/API keys or personal account passwords.
+4. Confirm the provenance and usage rights of all six menu images.
+5. Confirm all originality statements personally, fill the representative's
+   details, date/place, and sign the separate declaration. This is a template,
+   not a signed or organizer-approved declaration.
+6. Verify public repository/site/video access without your account, all eight
+   migrations on the target deployment, seeded demo data, and browser/tablet
+   behavior. Automated local tests do not establish deployment readiness.
+7. Rebuild after editing content.py, inspect PDF pagination (maximum 15 pages),
+   and rename the PDF to GTNIC2026_WebDev_<RegisteredTeamName>.pdf.
+   The DOCX is editable; Word pagination can differ from the validated PDF.
+8. Submit the site, repository, video, proposal, and signed declaration using
+   the organizer's official form. Nothing has been uploaded automatically.
+
+SUGGESTED FOUR-MINUTE VIDEO RUN OF SHOW
+0:00-0:25  Introduce the registered team and the operational problem.
+0:25-0:50  Explain the owner/cashier scenario and the connected workflow.
+0:50-2:10  Show menu selection, order confirmation, and simulated checkout.
+2:10-2:50  Follow the same sale into receipt, stock deduction, and finance.
+2:50-3:20  Show optional order parsing with its source label and human review.
+3:20-3:45  Explain cloud roles, architecture, and honest system limitations.
+3:45-4:00  Close with planned pilot metrics and public demo/repository links.
+Use only fictional data. Never display private keys or real customer data.

@@ -1,0 +1,104 @@
+{
+  "status": "DRAFT",
+  "pdf": "GTNIC2026_WebDev_NamaTim.pdf",
+  "pages": [
+    {
+      "page": 1,
+      "characters": 656,
+      "images": 1
+    },
+    {
+      "page": 2,
+      "characters": 2136,
+      "images": 0
+    },
+    {
+      "page": 3,
+      "characters": 2223,
+      "images": 0
+    },
+    {
+      "page": 4,
+      "characters": 1203,
+      "images": 1
+    },
+    {
+      "page": 5,
+      "characters": 839,
+      "images": 1
+    },
+    {
+      "page": 6,
+      "characters": 715,
+      "images": 1
+    },
+    {
+      "page": 7,
+      "characters": 1615,
+      "images": 0
+    },
+    {
+      "page": 8,
+      "characters": 2312,
+      "images": 0
+    },
+    {
+      "page": 9,
+      "characters": 2073,
+      "images": 0
+    },
+    {
+      "page": 10,
+      "characters": 1547,
+      "images": 0
+    },
+    {
+      "page": 11,
+      "characters": 2051,
+      "images": 0
+    },
+    {
+      "page": 12,
+      "characters": 302,
+      "images": 2
+    },
+    {
+      "page": 13,
+      "characters": 216,
+      "images": 2
+    },
+    {
+      "page": 14,
+      "characters": 1896,
+      "images": 0
+    },
+    {
+      "page": 15,
+      "characters": 632,
+      "images": 0
+    }
+  ],
+  "format_errors": [],
+  "pending_fields": [
+    "[ISI TAUTAN HTTPS PUBLIK SETELAH DEPLOY]",
+    "[ISI TAUTAN YOUTUBE/DRIVE AKSES PUBLIK]",
+    "[Instansi/Perguruan Tinggi]",
+    "[KONFIRMASI SUMBER ASET: asal dan hak penggunaan enam gambar menu WebP di public/images; keberadaan berkas gambar saja belum membuktikan lisensi]",
+    "[LENGKAPI AKSES JURI: URL deployment dan akun uji terpisah untuk keempat peran; isi hanya kredensial demo khusus melalui dokumen pengumpulan]",
+    "[NAMA TIM]",
+    "[NIM/NIS]",
+    "[Nama Anggota 1]",
+    "[Nama Anggota 2]",
+    "[Nama Anggota 3]"
+  ],
+  "body_font": "Times New Roman 12 pt",
+  "line_spacing": 1.5,
+  "margins_cm": {
+    "left": 4,
+    "top": 3,
+    "right": 3,
+    "bottom": 3
+  },
+  "logo_source": "Guide Book Web Dev (2).pdf, page 19",
+  "docx_note": "Editable source; Word pagination is not certified by this PDF check."
+}

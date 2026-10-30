@@ -7,8 +7,12 @@ Jalankan: C:\\Python313\\python.exe build_proposal.py
 """
 
 from pathlib import Path
+from html import escape
+import json
+import re
 
-from PIL import Image as PILImage
+import pymupdf
+from PIL import Image as PILImage, ImageDraw
 
 import docx
 from docx.enum.section import WD_SECTION
@@ -18,6 +22,7 @@ from docx.oxml import OxmlElement
 from docx.oxml.ns import qn
 from docx.shared import Cm, Pt, RGBColor
 
+from reportlab import rl_config
 from reportlab.lib import colors
 from reportlab.lib.enums import TA_CENTER, TA_JUSTIFY
 from reportlab.lib.pagesizes import A4
@@ -40,6 +45,7 @@ WIN_FONTS = Path(r"C:\Windows\Fonts")
 USABLE_CM = 21.0 - 4.0 - 3.0  # 14 cm
 BODY_PT = 12
 LEADING = BODY_PT * 1.5
+rl_config.useA85 = False
 
 pdfmetrics.registerFont(TTFont("TNR", str(WIN_FONTS / "times.ttf")))
 pdfmetrics.registerFont(TTFont("TNR-Bold", str(WIN_FONTS / "timesbd.ttf")))
@@ -62,26 +68,26 @@ def img_height_cm(name: str, width_cm: float) -> float:
 S = {
     "body": ParagraphStyle("body", fontName="TNR", fontSize=BODY_PT, leading=LEADING,
                            alignment=TA_JUSTIFY, spaceAfter=6),
-    "h1": ParagraphStyle("h1", fontName="TNR-Bold", fontSize=13, leading=19,
+    "h1": ParagraphStyle("h1", fontName="TNR-Bold", fontSize=12, leading=18,
                          spaceBefore=12, spaceAfter=5, keepWithNext=1),
     "h2": ParagraphStyle("h2", fontName="TNR-Bold", fontSize=12, leading=LEADING,
                          spaceBefore=8, spaceAfter=3, keepWithNext=1),
     "list": ParagraphStyle("list", fontName="TNR", fontSize=BODY_PT, leading=LEADING,
                            alignment=TA_JUSTIFY, leftIndent=18, bulletIndent=4,
-                           spaceAfter=4),
-    "cap": ParagraphStyle("cap", fontName="TNR-Italic", fontSize=11, leading=15,
+                           bulletFontName="TNR", bulletFontSize=BODY_PT, spaceAfter=4),
+    "cap": ParagraphStyle("cap", fontName="TNR-Italic", fontSize=12, leading=18,
                           alignment=TA_CENTER, spaceBefore=4, spaceAfter=10),
-    "note": ParagraphStyle("note", fontName="TNR-Italic", fontSize=11, leading=16,
+    "note": ParagraphStyle("note", fontName="TNR-Italic", fontSize=12, leading=18,
                            alignment=TA_JUSTIFY, leftIndent=8, rightIndent=8,
                            spaceBefore=4, spaceAfter=8,
                            textColor=colors.HexColor("#6b5a1f")),
-    "cell": ParagraphStyle("cell", fontName="TNR", fontSize=10.5, leading=14),
-    "cellh": ParagraphStyle("cellh", fontName="TNR-Bold", fontSize=10.5, leading=14),
+    "cell": ParagraphStyle("cell", fontName="TNR", fontSize=12, leading=18),
+    "cellh": ParagraphStyle("cellh", fontName="TNR-Bold", fontSize=12, leading=18),
     "cv_small": ParagraphStyle("cv_small", fontName="TNR", fontSize=12, leading=18,
                                alignment=TA_CENTER),
-    "cv_mid": ParagraphStyle("cv_mid", fontName="TNR-Bold", fontSize=13, leading=20,
+    "cv_mid": ParagraphStyle("cv_mid", fontName="TNR-Bold", fontSize=12, leading=18,
                              alignment=TA_CENTER),
-    "cv_title": ParagraphStyle("cv_title", fontName="TNR-Bold", fontSize=18, leading=26,
+    "cv_title": ParagraphStyle("cv_title", fontName="TNR-Bold", fontSize=12, leading=18,
                                alignment=TA_CENTER),
     "cv_logo": ParagraphStyle("cv_logo", fontName="TNR-Italic", fontSize=12, leading=18,
                               alignment=TA_CENTER,
@@ -89,6 +95,8 @@ S = {
 }
 
 TABLE_STYLE = TableStyle([
+    ("FONTNAME", (0, 0), (-1, -1), "TNR"),
+    ("FONTSIZE", (0, 0), (-1, -1), 12),
     ("GRID", (0, 0), (-1, -1), 0.6, colors.HexColor("#5a665e")),
     ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#dfeee5")),
     ("VALIGN", (0, 0), (-1, -1), "TOP"),
@@ -98,7 +106,15 @@ TABLE_STYLE = TableStyle([
     ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
 ])
 
-COL_WIDTHS = {3: [2.7 * cm, 5.3 * cm, 6.0 * cm]}
+COL_WIDTHS = {2: [5 * cm, 9 * cm], 3: [4 * cm, 5 * cm, 5 * cm]}
+
+
+def plain(text, style, **kwargs):
+    """Content is plain text, never ReportLab markup (including F&B)."""
+    value = escape(text)
+    if text.startswith("https://") and " " not in text:
+        value = f'<link href="{value}" color="#174a76">{value}</link>'
+    return Paragraph(value, style, **kwargs)
 
 
 def footer(canvas, doc):
@@ -111,24 +127,28 @@ def footer(canvas, doc):
 
 def pdf_cover():
     m = content.META
-    flow = [Spacer(1, 0.8 * cm), Paragraph(m["logo_note"], S["cv_logo"]),
-            Spacer(1, 0.9 * cm),
+    logo = Image(str(ASSETS / m["logo"]), width=5.5 * cm,
+                 height=img_height_cm(m["logo"], 5.5) * cm)
+    logo.hAlign = "CENTER"
+    flow = [logo, Spacer(1, 0.6 * cm),
             Paragraph("PROPOSAL KARYA", S["cv_mid"]),
             Paragraph(m["competition"], S["cv_mid"]),
             Paragraph(m["category"], S["cv_small"]),
             Paragraph(m["subtheme"], S["cv_small"]),
             Spacer(1, 1.5 * cm),
-            Paragraph(m["title"], S["cv_title"]),
+            plain(m["title"], S["cv_title"]),
             Spacer(1, 1.4 * cm),
-            Paragraph(f"Nama Tim: <b>{m['team']}</b>", S["cv_small"]),
+            Paragraph(f"Nama Tim: <b>{escape(m['team'])}</b>", S["cv_small"]),
             Spacer(1, 0.3 * cm)]
     for member in m["members"]:
-        flow.append(Paragraph(member, S["cv_small"]))
+        flow.append(plain(member, S["cv_small"]))
     flow.append(Spacer(1, 1.2 * cm))
-    rows = [[Paragraph(label, S["cellh"]), Paragraph(value, S["cell"])]
+    rows = [[plain(label, S["cellh"]), plain(value, S["cell"])]
             for label, value in m["links"]]
     table = Table(rows, colWidths=[3.6 * cm, 10.4 * cm], hAlign="CENTER")
     table.setStyle(TableStyle([
+        ("FONTNAME", (0, 0), (-1, -1), "TNR"),
+        ("FONTSIZE", (0, 0), (-1, -1), 12),
         ("GRID", (0, 0), (-1, -1), 0.6, colors.HexColor("#5a665e")),
         ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
         ("TOPPADDING", (0, 0), (-1, -1), 5),
@@ -147,39 +167,49 @@ def pdf_blocks(blocks):
         kind = b["t"]
         if kind == "h1":
             counter = 0
-            flow.append(Paragraph(b["x"], S["h1"]))
+            flow.append(plain(b["x"], S["h1"]))
         elif kind == "h2":
             counter = 0
-            flow.append(Paragraph(b["x"], S["h2"]))
+            flow.append(plain(b["x"], S["h2"]))
         elif kind == "p":
             counter = 0
-            flow.append(Paragraph(b["x"], S["body"]))
+            flow.append(plain(b["x"], S["body"]))
         elif kind == "b":
             counter = 0
-            flow.append(Paragraph(b["x"], S["list"], bulletText="\u2022"))
+            flow.append(plain(b["x"], S["list"], bulletText="\u2022"))
         elif kind == "n":
             counter += 1
-            flow.append(Paragraph(b["x"], S["list"], bulletText=f"{counter}."))
+            flow.append(plain(b["x"], S["list"], bulletText=f"{counter}."))
         elif kind == "placeholder":
             counter = 0
-            flow.append(Paragraph(b["x"], S["note"]))
+            flow.append(plain(b["x"], S["note"]))
+        elif kind == "ref":
+            counter = 0
+            flow.append(Paragraph(
+                f'<link href="{escape(b["url"], quote=True)}" color="#174a76">'
+                f'{escape(b["x"])}</link>', S["body"]))
         elif kind == "img":
             counter = 0
             w = min(b["w"], USABLE_CM)
             pic = Image(str(ASSETS / b["f"]), width=w * cm,
                         height=img_height_cm(b["f"], w) * cm)
             pic.hAlign = "CENTER"
-            flow.append(KeepTogether([Spacer(1, 0.2 * cm), pic,
-                                      Paragraph(b["cap"], S["cap"])]))
+            group = [pic, plain(b["cap"], S["cap"])]
+            while flow and isinstance(flow[-1], Paragraph) and getattr(flow[-1].style, "keepWithNext", False):
+                group.insert(0, flow.pop())
+            flow.append(KeepTogether(group))
         elif kind == "table":
             counter = 0
-            rows = [[Paragraph(c, S["cellh"]) for c in b["head"]]]
-            rows += [[Paragraph(c, S["cell"]) for c in r] for r in b["rows"]]
-            widths = COL_WIDTHS.get(len(b["head"]))
+            rows = [[plain(c, S["cellh"]) for c in b["head"]]]
+            rows += [[plain(c, S["cell"]) for c in r] for r in b["rows"]]
+            widths = ([w * cm for w in b["widths"]] if "widths" in b
+                      else COL_WIDTHS[len(b["head"])])
             table = Table(rows, colWidths=widths, hAlign="CENTER", repeatRows=1)
             table.setStyle(TABLE_STYLE)
-            flow += [Spacer(1, 0.15 * cm), table,
-                     Paragraph(b["cap"], S["cap"])]
+            group = [table, plain(b["cap"], S["cap"])]
+            while flow and isinstance(flow[-1], Paragraph) and getattr(flow[-1].style, "keepWithNext", False):
+                group.insert(0, flow.pop())
+            flow.append(KeepTogether(group))
         else:
             raise ValueError(f"blok tidak dikenal: {kind}")
     return flow
@@ -190,8 +220,10 @@ def build_pdf(path: Path, flow):
                           leftMargin=4 * cm, rightMargin=3 * cm,
                           topMargin=3 * cm, bottomMargin=3 * cm,
                           title=content.META["title"],
-                          author=content.META["team"])
-    frame = Frame(doc.leftMargin, doc.bottomMargin, doc.width, doc.height, id="f")
+                          author=content.META["team"],
+                          initialFontName="TNR", initialFontSize=12, initialLeading=18)
+    frame = Frame(doc.leftMargin, doc.bottomMargin, doc.width, doc.height, id="f",
+                  leftPadding=0, rightPadding=0, topPadding=0, bottomPadding=0)
     doc.addPageTemplates([
         PageTemplate(id="cover", frames=[frame]),
         PageTemplate(id="body", frames=[frame], onPage=footer),
@@ -225,9 +257,12 @@ def docx_setup(document):
         style.font.name = "Times New Roman"
         style.font.color.rgb = RGBColor(0x1A, 0x20, 0x1D)
         style.element.rPr.rFonts.set(qn("w:eastAsia"), "Times New Roman")
-    document.styles["Heading 1"].font.size = Pt(13)
+    document.styles["Heading 1"].font.size = Pt(12)
     document.styles["Heading 2"].font.size = Pt(12)
-    document.styles["Caption"].font.size = Pt(11)
+    document.styles["Caption"].font.size = Pt(12)
+    for name in ("Heading 1", "Heading 2", "Caption", "List Bullet", "List Number"):
+        document.styles[name].paragraph_format.line_spacing = 1.5
+    normal.paragraph_format.widow_control = True
     document.styles["Caption"].font.italic = True
     return section
 
@@ -268,25 +303,35 @@ def docx_para(document, text, *, style=None, align=None, bold=False, italic=Fals
     return p
 
 
-def docx_table(document, head, rows):
+def docx_table(document, head, rows, widths=None):
     table = document.add_table(rows=1, cols=len(head))
     table.style = "Table Grid"
     table.alignment = WD_TABLE_ALIGNMENT.CENTER
+    table.autofit = False
+    widths = widths or [w / cm for w in COL_WIDTHS[len(head)]]
+    for col, width in zip(table.columns, widths):
+        col.width = Cm(width)
+    repeat = OxmlElement("w:tblHeader")
+    table.rows[0]._tr.get_or_add_trPr().append(repeat)
     for cell, label in zip(table.rows[0].cells, head):
         cell.text = ""
         run = cell.paragraphs[0].add_run(label)
         run.bold = True
-        run.font.size = Pt(10.5)
+        run.font.size = Pt(12)
         run.font.name = "Times New Roman"
-        cell.paragraphs[0].paragraph_format.line_spacing = 1
+        cell.paragraphs[0].paragraph_format.line_spacing = 1.5
     for row in rows:
         cells = table.add_row().cells
         for cell, value in zip(cells, row):
             cell.text = ""
             run = cell.paragraphs[0].add_run(value)
-            run.font.size = Pt(10.5)
+            run.font.size = Pt(12)
             run.font.name = "Times New Roman"
-            cell.paragraphs[0].paragraph_format.line_spacing = 1
+            cell.paragraphs[0].paragraph_format.line_spacing = 1.5
+    for row in table.rows:
+        row._tr.get_or_add_trPr().append(OxmlElement("w:cantSplit"))
+        for cell, width in zip(row.cells, widths):
+            cell.width = Cm(width)
     return table
 
 
@@ -296,12 +341,14 @@ def build_docx(path: Path):
     section = docx_setup(document)
 
     center = WD_ALIGN_PARAGRAPH.CENTER
-    docx_para(document, m["logo_note"], align=center, italic=True, space_after=18)
-    docx_para(document, "PROPOSAL KARYA", align=center, bold=True, size=13, space_after=0)
-    docx_para(document, m["competition"], align=center, bold=True, size=13, space_after=0)
+    logo = document.add_paragraph()
+    logo.alignment = center
+    logo.add_run().add_picture(str(ASSETS / m["logo"]), width=Cm(5.5))
+    docx_para(document, "PROPOSAL KARYA", align=center, bold=True, size=12, space_after=0)
+    docx_para(document, m["competition"], align=center, bold=True, size=12, space_after=0)
     docx_para(document, m["category"], align=center, space_after=0)
     docx_para(document, m["subtheme"], align=center, space_after=30)
-    docx_para(document, m["title"], align=center, bold=True, size=18, space_after=36)
+    docx_para(document, m["title"], align=center, bold=True, size=12, space_after=36)
     docx_para(document, f"Nama Tim: {m['team']}", align=center, bold=True, space_after=6)
     for member in m["members"]:
         docx_para(document, member, align=center, space_after=0)
@@ -335,27 +382,42 @@ def build_docx(path: Path):
             docx_para(document, b["x"], style="List Bullet", space_after=4)
         elif kind == "n":
             counter += 1
-            docx_para(document, b["x"], style="List Number", space_after=4)
+            docx_para(document, f"{counter}. {b['x']}", indent=0.6, space_after=4)
         elif kind == "placeholder":
             counter = 0
-            docx_para(document, b["x"], italic=True, size=11, indent=0.5)
+            docx_para(document, b["x"], italic=True, size=12, indent=0.5)
+        elif kind == "ref":
+            counter = 0
+            p = docx_para(document, "")
+            link = OxmlElement("w:hyperlink")
+            relation = document.part.relate_to(b["url"],
+                "http://schemas.openxmlformats.org/officeDocument/2006/relationships/hyperlink",
+                is_external=True)
+            link.set(qn("r:id"), relation)
+            run = OxmlElement("w:r")
+            text = OxmlElement("w:t")
+            text.text = b["x"]
+            run.append(text)
+            link.append(run)
+            p._p.append(link)
         elif kind == "img":
             counter = 0
             w = min(b["w"], USABLE_CM)
             p = document.add_paragraph()
             p.alignment = center
             p.paragraph_format.space_after = Pt(2)
+            p.paragraph_format.keep_with_next = True
             p.add_run().add_picture(str(ASSETS / b["f"]), width=Cm(w))
             cap = document.add_paragraph(b["cap"], style="Caption")
             cap.alignment = center
-            cap.paragraph_format.line_spacing = 1
+            cap.paragraph_format.line_spacing = 1.5
             cap.paragraph_format.space_after = Pt(10)
         elif kind == "table":
             counter = 0
-            docx_table(document, b["head"], b["rows"])
+            docx_table(document, b["head"], b["rows"], b.get("widths"))
             cap = document.add_paragraph(b["cap"], style="Caption")
             cap.alignment = center
-            cap.paragraph_format.line_spacing = 1
+            cap.paragraph_format.line_spacing = 1.5
             cap.paragraph_format.space_after = Pt(10)
 
     document.save(str(path))
@@ -370,21 +432,23 @@ def pledge_blocks():
     p = content.PLEDGE
     flow = [Paragraph(f"<b>{p['title']}</b>",
                       ParagraphStyle("pt", parent=S["cv_title"], fontSize=14, leading=22)),
-            Spacer(1, 0.8 * cm), Paragraph(p["intro"], S["body"]), Spacer(1, 0.3 * cm)]
-    rows = [[Paragraph(f"<b>{label}</b>", S["cell"]), Paragraph(value, S["cell"])]
+            Spacer(1, 0.4 * cm), plain(p["intro"], S["body"]), Spacer(1, 0.1 * cm)]
+    rows = [[plain(label, S["cellh"]), plain(value, S["cell"])]
             for label, value in p["fields"]]
-    table = Table(rows, colWidths=[4.2 * cm, 9.8 * cm], hAlign="LEFT")
+    table = Table(rows, colWidths=[3.6 * cm, 10.4 * cm], hAlign="LEFT")
     table.setStyle(TableStyle([("VALIGN", (0, 0), (-1, -1), "TOP"),
-                               ("BOTTOMPADDING", (0, 0), (-1, -1), 4)]))
-    flow += [table, Spacer(1, 0.5 * cm),
+                               ("FONTNAME", (0, 0), (-1, -1), "TNR"),
+                               ("FONTSIZE", (0, 0), (-1, -1), 12),
+                               ("BOTTOMPADDING", (0, 0), (-1, -1), 2)]))
+    flow += [table, Spacer(1, 0.3 * cm),
              Paragraph("Dengan ini menyatakan bahwa:", S["body"])]
     for i, statement in enumerate(p["statements"], 1):
         flow.append(Paragraph(statement, S["list"], bulletText=f"{i}."))
-    flow += [Spacer(1, 0.4 * cm), Paragraph(p["closing"], S["body"]),
-             Spacer(1, 0.8 * cm)]
-    right = ParagraphStyle("right", parent=S["body"], alignment=2)
-    for sline in p["signature"]:
-        flow.append(Paragraph(sline or "&nbsp;", right))
+    flow += [Spacer(1, 0.2 * cm), plain(p["closing"], S["body"]),
+             Spacer(1, 0.2 * cm)]
+    right = ParagraphStyle("right", parent=S["body"], alignment=2, spaceAfter=0)
+    flow.append(KeepTogether([Paragraph(escape(sline) if sline else "&nbsp;", right)
+                              for sline in p["signature"]]))
     return flow
 
 
@@ -398,15 +462,79 @@ def build_pledge_docx(path: Path):
     docx_table(document, ["Keterangan", "Isi"], [list(x) for x in p["fields"]])
     docx_para(document, "", space_after=6)
     docx_para(document, "Dengan ini menyatakan bahwa:")
-    for statement in p["statements"]:
-        docx_para(document, statement, style="List Number", space_after=4)
+    for number, statement in enumerate(p["statements"], 1):
+        docx_para(document, f"{number}. {statement}", indent=0.6, space_after=4)
     docx_para(document, p["closing"], space_after=18)
     for sline in p["signature"]:
         docx_para(document, sline or "", align=WD_ALIGN_PARAGRAPH.RIGHT, space_after=0)
     document.save(str(path))
 
 
+def validate_pdf(path: Path):
+    """Check the submission PDF and render a contact sheet for visual inspection."""
+    failures = []
+    pages = []
+    with pymupdf.open(path) as pdf:
+        if len(pdf) > 15:
+            failures.append(f"Page limit exceeded: {len(pdf)} > 15")
+        sheet = PILImage.new("RGB", (3 * 310, ((len(pdf) + 2) // 3) * 450), "#dddddd")
+        draw = ImageDraw.Draw(sheet)
+        for index, page in enumerate(pdf):
+            if abs(page.rect.width - A4[0]) > 1 or abs(page.rect.height - A4[1]) > 1:
+                failures.append(f"Page {index + 1}: not A4")
+            spans = [s for b in page.get_text("dict")["blocks"] if "lines" in b
+                     for line in b["lines"] for s in line["spans"]]
+            for span in spans:
+                x0, y0, x1, y1 = span["bbox"]
+                if y0 > A4[1] - 3 * cm and span["text"].isdigit():
+                    continue
+                if x0 < 4 * cm - 2 or x1 > A4[0] - 3 * cm + 2 or y0 < 3 * cm - 2 or y1 > A4[1] - 3 * cm + 2:
+                    failures.append(f"Page {index + 1}: text outside margins: {span['text'][:35]}")
+                if abs(span["size"] - 12) > 0.1 or "TimesNewRoman" not in span["font"]:
+                    failures.append(f"Page {index + 1}: unexpected font: {span['font']} {span['size']}")
+            for info in page.get_image_info():
+                x0, y0, x1, y1 = info["bbox"]
+                if x0 < 4 * cm - 1 or x1 > A4[0] - 3 * cm + 1 or y0 < 3 * cm - 1 or y1 > A4[1] - 3 * cm + 1:
+                    failures.append(f"Page {index + 1}: image outside margins")
+            for font in page.get_fonts():
+                if font[1] == "n/a":
+                    failures.append(f"Page {index + 1}: unembedded font {font[3]}")
+            pix = page.get_pixmap(matrix=pymupdf.Matrix(0.5, 0.5), alpha=False)
+            preview = PILImage.frombytes("RGB", (pix.width, pix.height), pix.samples)
+            x, y = (index % 3) * 310, (index // 3) * 450
+            sheet.paste(preview, (x + 5, y + 20))
+            draw.text((x + 8, y + 4), f"Page {index + 1}", fill="black")
+            pages.append({"page": index + 1, "characters": len(page.get_text()),
+                          "images": len(page.get_image_info())})
+        sheet.save(OUT / "proposal-contact-sheet.png")
+        pdf[0].get_pixmap(matrix=pymupdf.Matrix(1.5, 1.5)).save(OUT / "proposal-cover.png")
+    def strings(value):
+        if isinstance(value, str):
+            yield value
+        elif isinstance(value, dict):
+            for item in value.values():
+                yield from strings(item)
+        elif isinstance(value, (list, tuple)):
+            for item in value:
+                yield from strings(item)
+    pending = sorted({m for text in strings([content.META, content.BLOCKS])
+                      for m in re.findall(r"\[[^\]]+\]", text) if m not in ("[1]", "[2]")})
+    report = {"status": "DRAFT" if pending else "REQUIRES_MANUAL_SUBMISSION_CHECKS",
+              "pdf": path.name, "pages": pages, "format_errors": failures,
+              "pending_fields": pending, "body_font": "Times New Roman 12 pt",
+              "line_spacing": 1.5, "margins_cm": {"left": 4, "top": 3, "right": 3, "bottom": 3},
+              "logo_source": "Guide Book Web Dev (2).pdf, page 19",
+              "docx_note": "Editable source; Word pagination is not certified by this PDF check."}
+    (OUT / "validation.json").write_text(json.dumps(report, indent=2, ensure_ascii=False), encoding="utf-8")
+    if failures:
+        raise ValueError("PDF validation failed:\n" + "\n".join(failures))
+    print(f"PDF checks passed: {len(pages)} A4 pages; {len(pending)} unresolved fields.")
+
+
 if __name__ == "__main__":
+    from make_diagrams import official_logo
+    if not (ASSETS / content.META["logo"]).exists():
+        official_logo()
     proposal_pdf = OUT / "GTNIC2026_WebDev_NamaTim.pdf"
     build_pdf(proposal_pdf, pdf_cover() + pdf_blocks(content.BLOCKS))
     build_docx(OUT / "GTNIC2026_WebDev_NamaTim.docx")
@@ -415,5 +543,8 @@ if __name__ == "__main__":
               [NextPageTemplate("body")] + pledge_blocks())
     build_pledge_docx(OUT / "Surat_Pernyataan_Keaslian_Karya.docx")
 
+    (OUT / "submission-checklist.txt").write_text(content.SUBMISSION_CHECKLIST, encoding="utf-8")
+    validate_pdf(proposal_pdf)
     for f in sorted(OUT.iterdir()):
-        print(f"{f.name:44} {f.stat().st_size // 1024:>5} KB")
+        if f.is_file():
+            print(f"{f.name:44} {f.stat().st_size // 1024:>5} KB")
