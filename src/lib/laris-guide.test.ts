@@ -56,7 +56,7 @@ test("demo tour previews the sale-to-impact path without opening a checkout or a
   assert.equal(new Set(demo.map(feature => feature.id)).size, demo.length);
   assert.ok(demo.every(feature => !feature.dialog && feature.steps.length));
   assert.match(demo.find(feature => feature.id === "demo-pos")!.description, /ketik|tertulis/i);
-  assert.match(demo.find(feature => feature.id === "demo-pos")!.description, /bukan Gemini/);
+  assert.match(demo.find(feature => feature.id === "demo-pos")!.description, /Gemini jika diaktifkan/);
   assert.match(demo.find(feature => feature.id === "demo-checkout")!.steps[0], /Tidak perlu melakukan checkout/);
   assert.deepEqual(getTourFeatures("owner", "cloud"), getTourFeatures("owner"));
   assert.ok(!getTourFeatures("owner", "cloud").some(feature => feature.id.startsWith("demo-")));

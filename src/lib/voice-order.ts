@@ -501,3 +501,51 @@ export function applyVoiceOrderProposal(source: VoiceOrderReview | null, value: 
     throw new VoiceOrderError("invalid-proposal", error instanceof Error ? error.message : "Usulan AI tidak valid.");
   }
 }
+
+/** Natural text may be segmented by the model, but every source word must survive review. */
+export function interpretVoiceOrder(text: string | null, value: unknown, catalog: VoiceCatalog): VoiceOrderResult {
+  const proposed = applyVoiceOrderProposal(null, value, catalog);
+  if (text === null) return proposed; // Audio proposals always need explicit acceptance.
+  if (text.length > VOICE_LIMITS.text) throw new VoiceOrderError("text-limit", "Pesanan maksimal 2.000 karakter.");
+  const source = normalize(text);
+  const occupied = new Set<number>();
+  const fragments = [...proposed.review.lines.map(line => line.raw), ...proposed.review.payment.raw];
+  for (const fragment of fragments) {
+    const raw = normalize(fragment);
+    let start = source.indexOf(raw);
+    while (start >= 0 && [...Array(raw.length).keys()].some(offset => occupied.has(start + offset))) start = source.indexOf(raw, start + 1);
+    if (start < 0) throw new VoiceOrderError("invalid-proposal", "Usulan AI mengubah ucapan asli.");
+    for (let i = start; i < start + raw.length; i++) occupied.add(i);
+  }
+  const remainder = [...source].map((char, i) => occupied.has(i) ? " " : char).join("");
+  // Connectors may fall between source fragments. Menu words, modifiers and numbers may not disappear.
+  if (remainder.replace(/\b(?:dan|sama|lalu|kemudian)\b/g, "").replace(/[\s,;.?!&+]/g, "")) throw new VoiceOrderError("invalid-proposal", "Ada bagian pesanan yang belum ditinjau.");
+  const lines = proposed.review.lines.map(line => {
+    const local = parseVoiceOrder(line.raw, catalog).review;
+    if (local.lines.length !== 1 || local.payment.raw.length) throw new VoiceOrderError("invalid-proposal", "Batas baris pesanan AI belum jelas.");
+    const evidence = local.lines[0];
+    if (evidence.status === "invalid" || evidence.issue === "unavailable") return { ...evidence, id: line.id };
+    if (evidence.quantity !== line.quantity) return { ...line, quantity: evidence.quantity, issue: "quantity" as const };
+    if (evidence.status === "exact" && evidence.productId === line.candidates[0]?.productId && (evidence.note ?? "") === (line.note ?? "")) return { ...evidence, id: line.id };
+    // A known collision is never reduced to a single AI guess.
+    if (evidence.status === "ambiguous" && evidence.candidates.length > 1) return { ...evidence, id: line.id, ...(line.note ? { note: line.note } : {}) };
+    return line;
+  });
+  const payment = paymentReview(proposed.review.payment.raw);
+  return projectVoiceOrder(validateReview({ version: 1, lines, payment }, catalog));
+}
+
+/** One explicit review action accepts single suggestions; unknown/ambiguous rows stay blocked. */
+export function acceptVoiceSuggestions(review: VoiceOrderReview, draft: VoiceOrderDraft): VoiceOrderDraft {
+  const evidence = paymentReview(review.payment.raw);
+  const method = evidence.status === "explicit" && review.payment.suggestedMethods?.includes(evidence.method!) ? evidence.method : null;
+  return {
+    ...draft,
+    rows: draft.rows.map(row => {
+      const line = review.lines.find(line => line.id === row.id);
+      return !row.removed && !row.accepted && line?.status === "suggested" && !line.issue && line.candidates.length === 1 && row.productId === line.candidates[0].productId && isQuantity(row.quantity)
+        ? { ...row, accepted: true } : row;
+    }),
+    ...(method && !draft.paymentAccepted ? { payment: method, paymentAccepted: true } : {}),
+  };
+}

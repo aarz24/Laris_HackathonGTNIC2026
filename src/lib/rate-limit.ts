@@ -1,6 +1,6 @@
 import "server-only";
 import { NextResponse, type NextRequest } from "next/server";
-import { isCloudConfigured, type AppMode } from "@/lib/env";
+import { isCloudConfigured, serverEnv, type AppMode } from "@/lib/env";
 import { createClient } from "@/lib/supabase/server";
 
 // Basic per-instance, in-memory fixed-window rate limiting. Good enough for a
@@ -14,6 +14,8 @@ const MAX_TRACKED_KEYS = 10_000;
 export const AI_CLOUD_LIMIT = 20;
 /** Per-minute limit per identity for cheap local-mode fallback AI requests. */
 export const AI_LOCAL_LIMIT = 30;
+export const AI_DEMO_VOICE_LIMIT = 10;
+const demoVoiceWindows = new Map<string, Bucket>();
 
 interface Bucket {
   count: number;
@@ -35,6 +37,7 @@ function consume(key: string, limit: number, now = Date.now()): RateLimitVerdict
     if (buckets.size >= MAX_TRACKED_KEYS) {
       // Opportunistic cleanup so attacker-churned identities cannot grow the map unbounded.
       for (const [staleKey, stale] of buckets) if (stale.resetAt <= now) buckets.delete(staleKey);
+      if (buckets.size >= MAX_TRACKED_KEYS) return { allowed: false, retryAfterSeconds: 60 };
     }
     buckets.set(key, { count: 1, resetAt: now + WINDOW_MS });
     return { allowed: true, retryAfterSeconds: 0 };
@@ -47,8 +50,8 @@ function consume(key: string, limit: number, now = Date.now()): RateLimitVerdict
 }
 
 /** Stable identity: the authenticated user id when available, else the request IP (first x-forwarded-for value). */
-async function identity(request: NextRequest): Promise<string> {
-  if (isCloudConfigured) {
+async function identity(request: NextRequest, mode: AppMode): Promise<string> {
+  if (mode === "cloud" && isCloudConfigured) {
     try {
       const supabase = await createClient();
       const { data: claims } = await supabase.auth.getClaims();
@@ -70,9 +73,21 @@ export async function aiRateLimit(
   feature: "ask" | "parse-order" | "scan-receipt",
   mode: AppMode,
 ): Promise<NextResponse | null> {
-  const who = await identity(request);
-  const limit = mode === "cloud" ? AI_CLOUD_LIMIT : AI_LOCAL_LIMIT;
-  const verdict = consume(`ai:${feature}:${who}`, limit);
+  const who = await identity(request, mode);
+  const demoVoice = mode === "local" && feature === "parse-order" && serverEnv().demoVoiceAi;
+  const limit = demoVoice ? AI_DEMO_VOICE_LIMIT : mode === "cloud" ? AI_CLOUD_LIMIT : AI_LOCAL_LIMIT;
+  let verdict = consume(`ai:${mode}:${feature}:${who}`, limit);
+  // Also cap anonymous voice traffic across all identities on this server instance.
+  // Production multi-instance deployments should enforce a shared budget at the gateway.
+  if (verdict.allowed && demoVoice) {
+    const now = Date.now();
+    for (const [key, duration, max] of [["minute", 60_000, 30], ["hour", 3_600_000, 120]] as const) {
+      const bucket = demoVoiceWindows.get(key);
+      if (!bucket || bucket.resetAt <= now) demoVoiceWindows.set(key, { count: 1, resetAt: now + duration });
+      else if (bucket.count >= max) { verdict = { allowed: false, retryAfterSeconds: Math.ceil((bucket.resetAt - now) / 1000) }; break; }
+      else bucket.count++;
+    }
+  }
   if (verdict.allowed) return null;
   return NextResponse.json(
     { error: "Terlalu banyak permintaan AI. Tunggu sebentar lalu coba lagi." },

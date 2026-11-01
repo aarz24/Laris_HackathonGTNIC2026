@@ -23,7 +23,7 @@ export class AiRequestError extends Error {
 
 export interface AiContext {
   mode: AppMode;
-  /** Gemini (billable API) may only run for authenticated cloud requests; local mode always uses offline fallbacks. */
+  /** General AI access; the parse-order route separately checks the opt-in demo voice flag. */
   allowGemini: boolean;
   businessId: string | null;
   today: string;
@@ -33,8 +33,7 @@ export interface AiContext {
 
 export async function requireAiContext(mode: AppMode, catalogOnly = false): Promise<AiContext> {
   const today = jakartaToday();
-  // Local/demo mode is unauthenticated by design and must never reach the billable Gemini API:
-  // routes only get offline fallbacks (rule-based answers, local parser, mock OCR).
+  // Local/demo has no tenant context. Only parse-order may opt into bounded Gemini use.
   if (mode === "local") return { mode, allowGemini: false, businessId: null, today, state: createInitialState(today) };
   if (!isCloudConfigured) throw new AiRequestError("Workspace cloud belum dikonfigurasi.", 503);
 

@@ -11,6 +11,7 @@ import * as requests from "./ai-request.ts";
 import * as fallbacks from "./ai-fallbacks.ts";
 import * as data from "./laris-data.ts";
 import * as voice from "./voice-order.ts";
+import { createVoiceRecording, voiceAudioPayload, type VoiceRecording } from "./voice-recorder.ts";
 import { resetDemoSession } from "./laris-guide.ts";
 import type { AiContext } from "./ai";
 
@@ -95,6 +96,7 @@ function routeHarness(feature: Feature, options: {
   provider?: (call: GenerationCall) => Promise<unknown>;
   modelAvailable?: boolean;
   local?: boolean;
+  demoAi?: boolean;
 } = {}) {
   const server = serverModule();
   const state = options.state ?? tenantState();
@@ -117,6 +119,7 @@ function routeHarness(feature: Feature, options: {
       },
     },
     "@/lib/ai-request": requests, "@/lib/ai-fallbacks": fallbacks, "@/lib/laris-data": data, "@/lib/voice-order": voice,
+    "@/lib/env": { serverEnv: () => ({ demoVoiceAi: options.demoAi ?? false }) },
     "@/lib/rate-limit": { aiRateLimit: async () => options.rateLimit ? options.rateLimit() : options.limited ?? null },
   });
   return { ...route, calls, contextCalls: () => contextCalls, server, context };
@@ -469,6 +472,61 @@ test("parse-order: limits reject the entire request before any provider invocati
   }
 });
 
+test("demo voice AI is opt-in, uses the browser demo catalogue, and retains review", async () => {
+  const catalog = [{ id: "demo-special", name: "Kopi Spesial", active: true }];
+  const output = { lines: [{ sourceId: "line-1", raw: "dua kopi spesial", quantity: 2, productId: "demo-special" }], payment: { method: "QRIS", raw: ["bayar qris"] } };
+  const enabled = routeHarness("parse-order", { local: true, demoAi: true, provider: async () => ({ output }) });
+  const response = await enabled.POST(requestFor("parse-order", undefined, { mode: "local", text: "dua kopi spesial bayar qris", catalog, interpret: true }));
+  const body = await response.json();
+  assert.equal(response.status, 200); assert.equal(body.source, "gemini"); assert.equal(enabled.calls.length, 1);
+  assert.match(enabled.calls[0].instructions, /demo-special/); assert.doesNotMatch(enabled.calls[0].instructions, /tenant-meal/);
+  assert.equal(voice.validateVoiceOrderResponse(body, catalog).items[0].quantity, 2);
+  const disabled = routeHarness("parse-order", { local: true });
+  const local = await (await disabled.POST(requestFor("parse-order", undefined, { mode: "local", text: "dua kopi spesial", catalog }))).json();
+  assert.equal(local.source, "local-parser"); assert.equal(disabled.calls.length, 0);
+  const cloud = routeHarness("parse-order", { modelAvailable: false });
+  const tenant = await (await cloud.POST(requestFor("parse-order", undefined, { text: "dua nasi tenant", catalog }))).json();
+  assert.equal(tenant.items[0].productId, "tenant-meal", "client catalogue never overrides cloud scope");
+});
+
+test("demo audio reaches Gemini once and every proposed menu still requires acceptance", async () => {
+  const output = { lines: [{ sourceId: "line-1", raw: "dua nasi tenant kurang manis", quantity: 2, productId: "tenant-meal", note: "less sugar" }], payment: { method: "QRIS", raw: ["bayar qris"] } };
+  const route = routeHarness("parse-order", { local: true, demoAi: true, provider: async () => ({ output }) });
+  const response = await route.POST(requestFor("parse-order", undefined, { mode: "local", text: "", audio: "eA==", mimeType: "audio/webm", interpret: true }));
+  const body = await response.json();
+  assert.equal(body.source, "gemini"); assert.match(body.transcript, /kurang manis/);
+  assert.equal(route.calls.length, 1); assert.equal(route.calls[0].messages?.[0].content[0].type, "file");
+  const result = voice.validateVoiceOrderResponse(body, tenantState().products!);
+  const draft = voice.createVoiceOrderDraft(result.review, tenantState().products!);
+  assert.equal(draft.rows[0].note, "less sugar"); assert.equal(draft.rows[0].accepted, false);
+  const accepted = voice.acceptVoiceSuggestions(result.review, draft);
+  assert.equal(voice.validateVoiceOrderDraft(result.review, accepted, tenantState().products!).ok, true);
+});
+
+test("demo voice has per-IP and shared instance limits without loading a user session", async () => {
+  const limiter = () => loadIsolated<typeof import("./rate-limit")>("./rate-limit.ts", {
+    "server-only": {}, "next/server": { NextResponse: Response },
+    "@/lib/env": { isCloudConfigured: true, serverEnv: () => ({ demoVoiceAi: true }) },
+    "@/lib/supabase/server": { createClient: () => { throw new Error("Demo must not load a cloud session"); } },
+  });
+  const ipRequest = (ip: string) => new Request("http://offline.invalid/api/ai/parse-order", { headers: { "x-forwarded-for": ip } }) as Parameters<ReturnType<typeof limiter>["aiRateLimit"]>[0];
+  const perIp = limiter();
+  for (let i = 0; i < 10; i++) assert.equal(await perIp.aiRateLimit(ipRequest("one"), "parse-order", "local"), null);
+  const blocked = await perIp.aiRateLimit(ipRequest("one"), "parse-order", "local");
+  assert.equal(blocked?.status, 429); assert.ok(Number(blocked?.headers.get("Retry-After")) > 0);
+  const shared = limiter();
+  for (let i = 0; i < 30; i++) assert.equal(await shared.aiRateLimit(ipRequest(`visitor-${i}`), "parse-order", "local"), null);
+  assert.equal((await shared.aiRateLimit(ipRequest("visitor-31"), "parse-order", "local"))?.status, 429);
+});
+
+test("malformed audio and duplicate demo catalogue IDs never invoke Gemini", async () => {
+  for (const input of [{ audio: "***", text: "" }, { catalog: [{ id: "same", name: "A" }, { id: "same", name: "B" }] }]) {
+    const route = routeHarness("parse-order", { local: true, demoAi: true });
+    const response = await route.POST(requestFor("parse-order", undefined, { mode: "local", ...input }));
+    assert.equal(response.status, 400); assert.equal(route.calls.length, 0);
+  }
+});
+
 test("cloud OCR without a model never returns demo content; local demo stays labeled", async () => {
   const cloud = routeHarness("scan-receipt", { modelAvailable: false });
   const failed = await cloud.POST(requestFor("scan-receipt"));
@@ -615,10 +673,12 @@ function componentLifecycleHarness(reproduceOldCleanup = false) {
   };
   visit(component);
   assert.equal(overviewClicks.length, 1, "Use the real Overview shortcut callback");
-  const snippets = ["invalidateVoicePreview", "cancelAiRequests", "open", "close", "askAssistant", "resetDemo"].map(declaration).join("\n");
+  const snippets = ["invalidateVoicePreview", "cancelAiRequests", "open", "close", "askAssistant", "resetDemo", "handleVoiceParse", "replaceVoiceText", "startVoice", "stopVoice", "applyVoiceProductNote", "confirmVoiceOrder"].map(declaration).join("\n");
+  const stockHelper = tree.statements.find(node => ts.isFunctionDeclaration(node) && node.name?.text === "unavailableCartProducts")!;
   type Message = { role: string; text: string };
   const values: { modal: string | null; messages: Message[]; pendingAi: boolean; pendingScan: boolean; recording: boolean; error: string; [key: string]: unknown } = {
     modal: null, messages: [], pendingAi: false, pendingScan: false, recording: false, error: "", state: tenantState(), demoRevision: 0,
+    parsed: null, voiceDraft: null, voiceText: "", voiceNotice: "", voiceConsumed: false, cart: [],
   };
   const setters = Object.fromEntries([...new Set(`${snippets}\n${effectSource}`.match(/\bset[A-Z]\w*(?=\()/g))].map(name => {
     const key = name[3].toLowerCase() + name.slice(4);
@@ -626,33 +686,57 @@ function componentLifecycleHarness(reproduceOldCleanup = false) {
   }));
   type Effect = { setup: () => void | (() => void); deps: readonly unknown[] };
   type Snapshot = { mode: "cloud" | "local"; workspaceId: string; user: { id: string }; canRecordOperations: boolean };
-  type Handlers = { open: (modal: string) => void; close: () => void; askAssistant: (question: string) => Promise<void>; overview: () => void; resetDemo: () => void };
+  type Handlers = {
+    open: (modal: string) => void; close: () => void; askAssistant: (question: string) => Promise<void>; overview: () => void; resetDemo: () => void;
+    handleVoiceParse: (text: string) => Promise<void>; replaceVoiceText: (text: string, parse?: boolean) => void;
+    startVoice: () => void; stopVoice: () => void; confirmVoiceOrder: () => void; applyVoiceProductNote: (productId: string, note: string) => void;
+  };
   const scheduled: Effect[] = [];
   let previous: Effect | undefined;
   let cleanup: void | (() => void);
   let cleanupCount = 0;
   const aiRequests = createRequestSlot(), scanRequests = createRequestSlot();
   const speech: { current: { stop: () => void } | null } = { current: null };
-  const voiceRevision = { current: 0 }, voiceConsumedGuard = { current: false };
+  const voiceRevision = { current: 0 }, voiceConsumedGuard = { current: false }, voicePreview = { current: null };
+  const audioRecording: { current: VoiceRecording | null } = { current: null };
+  const recognitions: FakeRecognition[] = [];
+  class FakeRecognition {
+    onresult?: (event: { results: { 0: { 0: { transcript: string } } } }) => void;
+    onerror?: () => void;
+    onend?: () => void;
+    stopped = false;
+    constructor() { recognitions.push(this); }
+    start() {}
+    stop() { this.stopped = true; this.onend?.(); }
+    result(transcript: string) { this.onresult?.({ results: { 0: { 0: { transcript } } } }); }
+  }
   const tasks: Promise<void>[] = [];
   const calls: { signal: AbortSignal; body: ReturnType<typeof deferred<Record<string, unknown>>> }[] = [];
   const removedKeys: string[] = [];
   const fetcher: typeof fetch = async (_url, init) => {
     assert.ok(init?.signal);
+    const input = JSON.parse(init.body as string);
+    if (input.mode === "local") return Response.json(voice.parseVoiceOrder(input.text, tenantState().products!));
     const body = deferred<Record<string, unknown>>();
     calls.push({ signal: init.signal, body });
     return { ok: true, json: () => body.promise } as unknown as Response;
   };
   const javascript = ts.transpileModule(`(snapshot => {
-    const { modal, mode, workspaceId, user, canRecordOperations, messages, confirmRequest } = snapshot;
+    const { modal, mode, workspaceId, user, canRecordOperations, messages, confirmRequest, parsed, voiceDraft, cart, pendingAi, recording, state } = snapshot;
+    const { products, inventory } = state;
+    ${stockHelper.getText(tree)}
     ${snippets}
     ${effectSource}
     const originalAsk = askAssistant;
     askAssistant = question => track(originalAsk(question));
-    return { open, close, askAssistant, resetDemo, overview: ${overviewClicks[0].getText(tree)} };
+    const originalParse = handleVoiceParse;
+    handleVoiceParse = text => track(originalParse(text));
+    return { open, close, askAssistant, resetDemo, handleVoiceParse, replaceVoiceText, startVoice, stopVoice, confirmVoiceOrder, applyVoiceProductNote, overview: ${overviewClicks[0].getText(tree)} };
   })`, { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS } }).outputText;
   const createHandlers = runInNewContext(javascript, {
-    ...setters, aiRequests, scanRequests, speech, voiceRevision, voiceConsumedGuard, Error,
+    ...setters, aiRequests, scanRequests, speech, audioRecording, voiceRevision, voiceConsumedGuard, voicePreview, Error,
+    createVoiceRecording, voiceAudioPayload, AiHttpError: requests.AiHttpError,
+    ...voice, getStock: data.getStock,
     useCallback: <T>(callback: T) => callback,
     useEffect: (setup: Effect["setup"], deps: Effect["deps"]) => { scheduled.push({ setup, deps }); },
     fetchAiJson: (url: string, init: RequestInit, signal: AbortSignal) => fetchAiJson(url, init, signal, fetcher),
@@ -660,7 +744,7 @@ function componentLifecycleHarness(reproduceOldCleanup = false) {
     track: (task: Promise<void>) => { tasks.push(task); return task; },
     resetDemoSession, createInitialState: data.createInitialState, activeToday: data.DEMO_DATE, demoProducts: data.products,
     checkoutAttempt: { current: null }, purchaseAttempt: { current: null },
-    window: { localStorage: { removeItem: (key: string) => removedKeys.push(key) } },
+    window: { localStorage: { removeItem: (key: string) => removedKeys.push(key) }, SpeechRecognition: FakeRecognition },
     go: (view: string) => { values.view = view; }, notify: (text: string) => { values.toast = text; },
   }) as (snapshot: Snapshot & Record<string, unknown>) => Handlers;
   let props: Snapshot = { mode: "cloud", workspaceId: "workspace-a", user: { id: "user-a" }, canRecordOperations: true };
@@ -681,7 +765,7 @@ function componentLifecycleHarness(reproduceOldCleanup = false) {
   const settle = async () => { await Promise.all(tasks); };
   commit();
   return {
-    values, calls, aiRequests, scanRequests, speech, removedKeys, commit, unmount, settle,
+    values, calls, aiRequests, scanRequests, speech, removedKeys, recognitions, commit, unmount, settle,
     get handlers() { return handlers; }, get cleanupCount() { return cleanupCount; },
     dispose: () => { unmount(); aiRequests.cancel(); scanRequests.cancel(); return settle(); },
   };
@@ -835,6 +919,137 @@ test("actual confirmed demo reset cancels both slots before clearing the convers
   assert.equal(request.canCommit(), false); assert.equal(request.finish(), false);
 });
 
+test("voice confirmation consumes a reviewed preview once, even before React commits", async t => {
+  const app = componentLifecycleHarness(); t.after(() => app.dispose());
+  app.commit({ mode: "local" }); app.commit();
+  await app.handlers.handleVoiceParse("2 nasi tenant bayar qris"); app.commit();
+  const confirm = app.handlers.confirmVoiceOrder;
+  confirm(); confirm();
+  assert.equal((app.values.cart as data.CartItem[])[0].quantity, 2);
+  assert.equal(app.values.payment, "QRIS");
+  assert.equal(app.values.modal, null); assert.equal(app.values.parsed, null);
+});
+
+test("voice text edits and new recordings synchronously invalidate old confirmation closures", async t => {
+  for (const action of ["text", "recording", "parse", "close"] as const) {
+    const app = componentLifecycleHarness(); t.after(() => app.dispose());
+    app.commit({ mode: "local" }); app.commit();
+    await app.handlers.handleVoiceParse("2 nasi tenant"); app.commit();
+    const oldConfirm = app.handlers.confirmVoiceOrder;
+    if (action === "text") app.handlers.replaceVoiceText("3 nasi tenant");
+    if (action === "recording") app.handlers.startVoice();
+    if (action === "parse") await app.handlers.handleVoiceParse("3 nasi tenant");
+    if (action === "close") { app.handlers.close(); app.handlers.open("voice"); }
+    oldConfirm();
+    assert.equal((app.values.cart as data.CartItem[]).length, 0, action);
+    if (action === "parse") {
+      app.commit(); app.handlers.confirmVoiceOrder();
+      assert.equal((app.values.cart as data.CartItem[])[0].quantity, 3);
+    }
+  }
+});
+
+test("voice requests reject late responses after text edits and close/reopen without clearing new work", async t => {
+  for (const action of ["text", "close"] as const) {
+    const app = componentLifecycleHarness(); t.after(() => app.dispose());
+    const old = app.handlers.handleVoiceParse("2 nasi tenant"); app.commit();
+    if (action === "text") app.handlers.replaceVoiceText("3 nasi tenant");
+    else { app.handlers.close(); app.handlers.open("voice"); }
+    const next = app.handlers.handleVoiceParse("3 nasi tenant"); app.commit();
+    app.calls[0].body.resolve(voice.parseVoiceOrder("2 nasi tenant", tenantState().products!) as unknown as Record<string, unknown>);
+    await old;
+    assert.equal(app.values.parsed, null); assert.equal(app.values.pendingAi, true);
+    app.calls[1].body.resolve(voice.parseVoiceOrder("3 nasi tenant", tenantState().products!) as unknown as Record<string, unknown>);
+    await next; app.commit();
+    assert.equal((app.values.voiceDraft as voice.VoiceOrderDraft).rows[0].quantity, 3);
+    assert.equal(app.values.pendingAi, false);
+  }
+});
+
+test("manual voice edits stop recognition first and ignore all late speech callbacks", async t => {
+  const app = componentLifecycleHarness(); t.after(() => app.dispose());
+  app.handlers.startVoice(); app.commit();
+  const recognition = app.recognitions[0];
+  app.handlers.replaceVoiceText("typed order");
+  assert.equal(recognition.stopped, true); assert.equal(app.values.recording, false);
+  recognition.result("late transcript"); recognition.onerror?.(); recognition.onend?.();
+  assert.equal(app.values.voiceText, "typed order"); assert.equal(app.values.error, ""); assert.equal(app.calls.length, 0);
+  app.handlers.startVoice(); app.commit();
+  recognition.onend?.();
+  assert.equal(app.values.recording, true, "old onend cannot finish the replacement recording");
+});
+
+for (const change of [{ workspaceId: "workspace-b" }, { user: { id: "user-b" } }, { mode: "local" as const }]) {
+  test(`voice identity cleanup clears recording, transcript and preview: ${JSON.stringify(change)}`, async t => {
+    const app = componentLifecycleHarness(); t.after(() => app.dispose());
+    app.handlers.startVoice(); app.commit();
+    const recognition = app.recognitions[0];
+    recognition.result("2 nasi tenant"); app.commit();
+    app.values.voiceNotice = "Previous tenant notice";
+    app.commit(change);
+    assert.equal(recognition.stopped, true); assert.equal(app.values.recording, false);
+    assert.equal(app.values.voiceText, ""); assert.equal(app.values.voiceNotice, "");
+    assert.equal(app.values.parsed, null); assert.equal(app.values.voiceDraft, null);
+    app.calls[0].body.resolve(voice.parseVoiceOrder("2 nasi tenant", tenantState().products!) as unknown as Record<string, unknown>);
+    await app.settle();
+    assert.equal(app.values.parsed, null);
+  });
+}
+
+function recordingHarness() {
+  const permission = deferred<MediaStream>();
+  let stopped = 0;
+  const stream = { getTracks: () => [{ stop: () => { stopped++; } }] } as unknown as MediaStream;
+  const recorders: Recorder[] = [];
+  class Recorder {
+    static isTypeSupported(type: string) { return type === "audio/webm;codecs=opus"; }
+    state = "inactive";
+    mimeType = "audio/webm;codecs=opus";
+    ondataavailable?: (event: { data: Blob }) => void;
+    onstop?: () => void;
+    onerror?: () => void;
+    constructor() { recorders.push(this); }
+    start() { this.state = "recording"; }
+    stop() { this.state = "inactive"; this.ondataavailable?.({ data: new Blob(["recorded audio"]) }); this.onstop?.(); }
+  }
+  const audio: Blob[] = [], errors: string[] = [], ticks: number[] = [];
+  const recording = createVoiceRecording({ onAudio: blob => audio.push(blob), onError: message => errors.push(message), onTick: seconds => ticks.push(seconds) }, { getUserMedia: () => permission.promise }, Recorder as unknown as typeof MediaRecorder);
+  return { permission, stream, recorders, recording, audio, errors, ticks, stopped: () => stopped };
+}
+
+test("recording sends complete audio once, preserves MIME and releases the microphone", async () => {
+  const h = recordingHarness(); h.permission.resolve(h.stream); await Promise.resolve();
+  h.recording.finish(); h.recording.finish();
+  assert.equal(h.audio.length, 1); assert.equal(h.stopped(), 1);
+  assert.deepEqual(await voiceAudioPayload(h.audio[0]), { audio: Buffer.from("recorded audio").toString("base64"), mimeType: "audio/webm" });
+});
+
+test("recording cancellation during permission and during capture never submits audio", async () => {
+  for (const beforePermission of [true, false]) {
+    const h = recordingHarness();
+    if (beforePermission) h.recording.cancel();
+    h.permission.resolve(h.stream); await Promise.resolve();
+    if (!beforePermission) h.recording.cancel();
+    assert.equal(h.audio.length, 0); assert.equal(h.errors.length, 0); assert.ok(h.stopped() > 0);
+  }
+});
+
+test("recording auto-finishes at thirty seconds and permission failures are actionable", async t => {
+  t.mock.timers.enable({ apis: ["setInterval", "Date"] });
+  const h = recordingHarness(); h.permission.resolve(h.stream); await Promise.resolve();
+  t.mock.timers.tick(30_000);
+  assert.equal(h.audio.length, 1); assert.ok(h.stopped() > 0);
+  const denied = recordingHarness(); denied.permission.reject(new DOMException("Denied", "NotAllowedError"));
+  await Promise.resolve(); await Promise.resolve();
+  assert.match(denied.errors[0], /Izinkan mikrofon/); assert.equal(denied.audio.length, 0);
+});
+
+test("stopping before permission resolves releases a late stream and reports no recording", async () => {
+  const h = recordingHarness(); h.recording.finish();
+  h.permission.resolve(h.stream); await Promise.resolve();
+  assert.equal(h.audio.length, 0); assert.ok(h.stopped() > 0); assert.match(h.errors[0], /belum dimulai/);
+});
+
 test("component wiring guards results, cancels lifecycle requests, and leaves manual OCR fields usable", () => {
   const source = readFileSync(new URL("../components/laris-app.tsx", import.meta.url), "utf8");
   for (const name of ["askAssistant", "handleVoiceParse", "handleReceiptScan"]) {
@@ -868,7 +1083,7 @@ test("component wiring guards results, cancels lifecycle requests, and leaves ma
   assert.match(source, /if \(speech\.current !== recognition\) return/);
   assert.match(source, /function replaceVoiceText\([\s\S]*?cancelAiRequests\(\); invalidateVoicePreview\(\)[\s\S]*?setVoiceText\(text\)/);
   assert.match(source, /function startVoice\(\) \{[\s\S]*?cancelAiRequests\(\); invalidateVoicePreview\(\)/);
-  assert.match(source, /const result = validateVoiceOrderResponse\(data, products\);\s*setParsed\(result\); setVoiceDraft\(createVoiceOrderDraft\(result\.review, products\)\)/);
+  assert.match(source, /const result = validateVoiceOrderResponse\(data, products\);\s*voicePreview\.current = result;\s*setParsed\(result\); setVoiceDraft\(createVoiceOrderDraft\(result\.review, products\)\)/);
   assert.match(source, /function confirmVoiceOrder\(\) \{\s*if \(voiceConsumedGuard\.current\) return;\s*voiceConsumedGuard\.current = true/);
   assert.match(source, /validateVoiceOrderDraft\(parsed\.review, voiceDraft, products\)/);
   assert.match(source, /mergeVoiceOrderDraft\(parsed\.review, voiceDraft, cart, products\)/);

@@ -1,0 +1,56 @@
+{
+  "results": [
+    {
+      "viewport": "mobile",
+      "width": 390,
+      "height": 844,
+      "passed": [
+        "original quantities",
+        "unresolved blocked",
+        "independent payment",
+        "suggestion acceptance",
+        "quantity and note edit",
+        "cart insertion",
+        "unknown removal",
+        "text invalidation",
+        "close/reopen",
+        "no horizontal overflow"
+      ]
+    },
+    {
+      "viewport": "tablet",
+      "width": 768,
+      "height": 1024,
+      "passed": [
+        "original quantities",
+        "unresolved blocked",
+        "independent payment",
+        "suggestion acceptance",
+        "quantity and note edit",
+        "cart insertion",
+        "unknown removal",
+        "text invalidation",
+        "close/reopen",
+        "no horizontal overflow"
+      ]
+    },
+    {
+      "viewport": "desktop",
+      "width": 1440,
+      "height": 1000,
+      "passed": [
+        "original quantities",
+        "unresolved blocked",
+        "independent payment",
+        "suggestion acceptance",
+        "quantity and note edit",
+        "cart insertion",
+        "unknown removal",
+        "text invalidation",
+        "close/reopen",
+        "no horizontal overflow"
+      ]
+    }
+  ],
+  "errors": []
+}

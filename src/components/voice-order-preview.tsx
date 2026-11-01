@@ -1,7 +1,8 @@
 "use client";
 
-import { Banknote, Check, CircleAlert, Grid2X2, Landmark, RotateCcw, Sparkles, Trash2 } from "lucide-react";
+import { Banknote, Check, CheckCheck, CircleAlert, Grid2X2, Landmark, RotateCcw, Sparkles, Trash2 } from "lucide-react";
 import { currency, type CartItem, type Product } from "@/lib/laris-data";
+import { acceptVoiceSuggestions } from "@/lib/voice-order";
 import type {
   VoiceCandidate,
   VoiceDraftProblem,
@@ -120,10 +121,12 @@ export function VoiceOrderPreview({
       <div>
         <span className={styles.eyebrow}>TINJAUAN PESANAN</span>
         <h3 id="voice-review-title">Pastikan tiap ucapan sudah tepat.</h3>
-        <p>Yang samar tetap ditampilkan. Pilihan saran baru dipakai setelah kamu menekannya.</p>
+        <p>Menu, jumlah, dan catatan sudah diisi. Periksa hasilnya; bagian yang belum jelas tetap bisa diperbaiki.</p>
       </div>
       <span className={styles.counter}>{review.lines.length} frasa</span>
     </div>
+
+    {draft.rows.some(row => !row.removed && !row.accepted && review.lines.some(line => line.id === row.id && line.status === "suggested" && !line.issue)) && <button type="button" className="button secondary full-width" onClick={() => onDraftChange(acceptVoiceSuggestions(review, draft))}><CheckCheck size={17}/>Terima saran yang jelas</button>}
 
     <div className={styles.timeline}>
       {review.lines.map((line, index) => {

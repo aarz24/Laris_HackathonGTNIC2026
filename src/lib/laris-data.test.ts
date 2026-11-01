@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import type { BusinessState, CartItem, Sale, SaleItem } from "./laris-data";
-import { parseVoiceOrder, validateVoiceOrderResponse, createVoiceOrderDraft, validateVoiceOrderDraft, mergeVoiceOrderDraft, applyVoiceOrderProposal, VoiceOrderError } from "./voice-order.ts";
+import { parseVoiceOrder, validateVoiceOrderResponse, createVoiceOrderDraft, validateVoiceOrderDraft, mergeVoiceOrderDraft, applyVoiceOrderProposal, interpretVoiceOrder, acceptVoiceSuggestions, VoiceOrderError } from "./voice-order.ts";
 import type { VoiceCatalog, VoiceOrderProposal, VoiceOrderResult } from "./voice-order.ts";
 
 // Native Node requires a .ts URL. A dynamic URL avoids requiring a project-wide
@@ -720,6 +720,37 @@ test("malformed cloud refs, raw text, catalogue IDs and quantities fail closed",
   assert.deepEqual(audio.review.lines.map(line => line.id), ["a", "b"], "audio source IDs remain stable through review");
   assert.equal(audio.review.lines[0].status, "suggested"); assert.equal(audio.review.lines[1].status, "unknown");
   assert.equal(validateVoiceOrderDraft(audio.review, createVoiceOrderDraft(audio.review, products), products).ok, false);
+});
+
+test("natural interpretation preserves every source word, quantities, notes and unknown payment", () => {
+  const text = "kopi susunya dua kurang manis dan satu butter crossan bayar kiri";
+  const proposal = { lines: [
+    { sourceId: "a", raw: "kopi susunya dua kurang manis", quantity: 2, productId: "kopi-susu", note: "less sugar" },
+    { sourceId: "b", raw: "satu butter crossan", quantity: 1, productId: "croissant" },
+  ], payment: { method: "QRIS", raw: ["bayar kiri"] } };
+  const result = interpretVoiceOrder(text, proposal, products);
+  assert.equal(result.review.lines[0].quantity, 2); assert.equal(result.review.lines[0].note, "less sugar");
+  assert.equal(result.review.payment.method, null);
+  const draft = acceptVoiceSuggestions(result.review, createVoiceOrderDraft(result.review, products));
+  assert.ok(draft.rows.every(row => row.accepted)); assert.equal(draft.paymentAccepted, false);
+  assert.equal(validateVoiceOrderDraft(result.review, draft, products).ok, false);
+  assert.throws(() => interpretVoiceOrder(`${text} satu pizza`, proposal, products), VoiceOrderError);
+  assert.throws(() => interpretVoiceOrder(text, { ...proposal, lines: [{ ...proposal.lines[0], raw: "dua kopi susu" }, proposal.lines[1]] }, products), VoiceOrderError);
+  assert.throws(() => interpretVoiceOrder(text, { ...proposal, lines: [...proposal.lines, { ...proposal.lines[0], sourceId: "duplicate" }] }, products), VoiceOrderError);
+});
+
+test("natural interpretation cannot clear invalid quantities, inactive products or conflicting payment", () => {
+  for (const raw of ["1,5 kopsu", "-2 kopsu", "1000 kopsu"]) {
+    const result = interpretVoiceOrder(raw, { lines: [{ sourceId: "a", raw, quantity: 2, productId: "kopi-susu" }], payment: { method: null, raw: [] } }, products);
+    assert.equal(result.review.lines[0].status, "invalid");
+    const draft = acceptVoiceSuggestions(result.review, createVoiceOrderDraft(result.review, products));
+    assert.equal(draft.rows[0].accepted, false);
+  }
+  const result = interpretVoiceOrder("2 kopsu bayar qris tunai", { lines: [{ sourceId: "a", raw: "2 kopsu", quantity: 3, productId: "kopi-susu" }], payment: { method: "QRIS", raw: ["bayar qris tunai"] } }, products);
+  assert.equal(result.review.lines[0].quantity, 2); assert.equal(result.review.lines[0].issue, "quantity");
+  assert.equal(result.review.payment.status, "conflicting");
+  const draft = acceptVoiceSuggestions(result.review, createVoiceOrderDraft(result.review, products));
+  assert.equal(draft.rows[0].accepted, false); assert.equal(draft.paymentAccepted, false);
 });
 
 test("CSV round-trips commas, quotes, newlines, rupiah and menu notes", () => {

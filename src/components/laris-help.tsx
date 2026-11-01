@@ -44,13 +44,9 @@ export function HelpCenter({ view, mode, onOpen, onTour }: {
   const results = findGuideFeatures(query).filter(feature => !currentPageOnly || feature.view === view);
 
   return <div className={styles.help}>
-    <div className={styles.tourIntro}>
-      <span className={styles.welcomeIcon}><Play size={21}/></span>
-      <div><h3>{mode === "local" ? "Dari pesanan ke laporan, dalam 6 langkah" : "Belajar sambil melihat langsung"}</h3><p>{mode === "local" ? "Lihat kasir, pembayaran, dampak stok dan pelanggan, lalu laporan. Tidak perlu checkout untuk menyelesaikan tur." : "Tur mengikuti peranmu. Owner mulai dari bahan dan menu sebelum penjualan serta laporan."} Tidak ada data yang diubah selama tur.</p></div>
-      <button className="button primary" onClick={() => onTour()}><Play size={14}/>Mulai / ulangi tur</button>
-    </div>
+    <div className={styles.finder}>
     <label className={`search-input ${styles.search}`}>
-      <Search size={18}/><input autoFocus aria-label="Cari panduan fitur" value={query} onChange={event => setQuery(event.target.value)} placeholder="Coba: cetak struk, stok opname, undang tim..."/>
+      <Search size={18}/><input autoFocus aria-label="Cari panduan fitur" value={query} onChange={event => setQuery(event.target.value)} placeholder="Cari panduan: struk, stok, atau tim..."/>
       {query && <button className="icon-button" aria-label="Hapus pencarian panduan" onClick={() => setQuery("")}><X size={16}/></button>}
     </label>
     <div className={styles.filters}>
@@ -60,6 +56,16 @@ export function HelpCenter({ view, mode, onOpen, onTour }: {
       </div>
       <span role="status">{results.length} panduan</span>
     </div>
+    </div>
+    <div className={styles.helpContent}>
+    <div className={styles.tourIntro}>
+      <span className={styles.welcomeIcon}><Play size={21}/></span>
+      <div className={styles.tourIntroCopy}><span className={styles.eyebrow}>JELAJAHI LARIS</span><h3>{mode === "local" ? "Dari pesanan ke laporan, dalam 6 langkah" : "Belajar sambil melihat langsung"}</h3><p>{mode === "local" ? "Kenali alur kasir, stok, pelanggan, dan laporan tanpa perlu checkout." : "Tur sesuai peranmu. Owner mulai dari bahan dan menu, lalu penjualan dan laporan."}</p></div>
+      <button className="button primary" onClick={() => onTour()}><Play size={14}/>Mulai / ulangi tur</button>
+      <p className={styles.tourReassurance}><ShieldCheck size={15}/>Tidak ada data yang diubah selama tur.</p>
+    </div>
+    <div className={styles.library}>
+    <div className={styles.libraryHeading}><h3>Panduan fitur</h3><p>Pilih topik, ikuti langkahnya.</p></div>
     <div className={styles.articles}>
       {results.map(feature => <details key={feature.id} className={styles.article}>
         <summary><span className={styles.articleIcon}><BookOpen size={18}/></span><span><strong>{feature.title}</strong><small>{feature.location}</small></span><ChevronRight size={17} className={styles.chevron}/></summary>
@@ -76,8 +82,10 @@ export function HelpCenter({ view, mode, onOpen, onTour }: {
       </details>)}
       {!results.length && <div className={styles.noResults}><Search size={25}/><h3>Belum ketemu?</h3><p>Coba kata singkat seperti “pajak”, “struk”, atau “bahan”.</p><button className="button secondary" onClick={() => { setQuery(""); setCurrentPageOnly(false); }}>Lihat semua panduan</button></div>}
     </div>
-    <p className={styles.footer}><CircleHelp size={15}/>Buka lagi lewat Bantuan di kanan atas. Pintasan: ? untuk panduan, Ctrl/⌘ K untuk pencarian.</p>
+    <p className={styles.footer}><CircleHelp size={15}/><span>Bantuan selalu ada di kanan atas. Tekan <kbd>?</kbd> untuk panduan atau <kbd>Ctrl/⌘ K</kbd> untuk pencarian.</span></p>
     <p className={styles.storageNote}>{mode === "local" ? "Demo: data fiktif hanya di browser ini, tidak dipindahkan ke akun. Mulai ulang demo di bagian atas mengembalikan data contoh dan pengenalan." : "Cloud: data operasional tersimpan di workspace Supabase sesuai akses tim."} Preferensi pengenalan disimpan di browser ini, bukan disinkronkan antarperangkat.</p>
+    </div>
+    </div>
   </div>;
 }
 
@@ -152,11 +160,13 @@ export function GuidedTour({ features, onNavigate, onClose }: {
         {feature.access && <p className={styles.access}><ShieldCheck size={14}/>{feature.access}</p>}
       </div>
       <p className={styles.safety}>Tur hanya menunjukkan fitur, tidak mengubah data atau keranjang. Tekan Esc untuk keluar.</p>
+      <div className={styles.tourFooter}>
       <div className={styles.tourActions}>
         <button className="button secondary" disabled={index === 0} onClick={() => setIndex(current => current - 1)}><ChevronLeft size={16}/>Kembali</button>
         <button className="button primary" onClick={() => index === features.length - 1 ? onClose(true) : setIndex(current => current + 1)}>{index === features.length - 1 ? <><Check size={16}/>Selesai</> : <>Berikutnya<ArrowRight size={16}/></>}</button>
       </div>
       <button className={styles.skip} onClick={() => onClose(false)}>Lewati tur · kembali bekerja</button>
+      </div>
     </div>
   </dialog>;
 }

@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useActionState } from "react";
-import { ArrowRight, Gavel, LoaderCircle, LockKeyhole, Mail, ShieldCheck, Sparkles } from "lucide-react";
+import { ArrowRight, Check, Coffee, Gavel, LoaderCircle, LockKeyhole, Mail, ShieldCheck, Sparkles } from "lucide-react";
 import { CafeIllustration, LarisMark } from "@/components/laris-visuals";
 import { judgeSignInAction, signInAction, type LoginState } from "./actions";
 import styles from "./login.module.css";
@@ -14,28 +14,38 @@ export default function LoginForm({ initialError, cloudConfigured, demoAvailable
   const busy = signingIn || judgePending;
 
   return (
-    <main className={styles.page} id="main-content">
+    <main className={`${styles.page} ${styles.loginPage}`} id="main-content">
       <section className={styles.brand} aria-label="Tentang Laris">
         <div className={styles.brandTop}><LarisMark /><span>Laris</span></div>
         <div className={styles.brandCopy}>
           <span className={styles.pill}><Sparkles size={13} />Partner tumbuh UMKM</span>
-          <h2>Teman di balik<br />ramainya kedai.</h2>
+          <h2>Ramai kedainya.<br /><em>Rapi kelolanya.</em></h2>
           <p>Dari pesanan pertama sampai laporan harian. Kasir, bahan, dan pelanggan tercatat dalam satu tempat.</p>
         </div>
-        <div className={styles.illustration} aria-hidden="true"><CafeIllustration /></div>
+        <div className={styles.illustration} aria-hidden="true">
+          <div className={styles.cafeScene}>
+            <span className={styles.sceneCaption}>CERITA BESAR, DARI KEDAI KECIL</span>
+            <CafeIllustration />
+            <span className={styles.sceneNote}><span><Check size={16} /></span>Pesanan, stok, laporan.<br />Semuanya nyambung.</span>
+          </div>
+        </div>
         <ul className={styles.trust}>
-          <li><ShieldCheck size={15} />Workspace cloud terpisah per usaha</li>
-          <li><LockKeyhole size={15} />Akses akun sesuai peran tim</li>
+          <li><ShieldCheck size={15} />Data terpisah per usaha</li>
+          <li><LockKeyhole size={15} />Akses sesuai peran tim</li>
         </ul>
       </section>
 
       <section className={styles.panel}>
         <div className={styles.card}>
-          <span className={styles.entryEyebrow}>DEMO INTERAKTIF · TANPA AKUN</span>
-          <h1>Coba dulu. Kenali Laris.</h1>
-          <p className={styles.lead}>Kedai contoh Kopi Senja sudah siap. Coba kasir, lihat stok berubah, lalu buka laporannya.</p>
-          <Link className={`${styles.submit} ${styles.demoPrimary}`} href="/demo" aria-describedby="demo-entry-note">Coba demo Kopi Senja<ArrowRight size={18} /></Link>
-          <p id="demo-entry-note" className={styles.demoNote}>Data contoh hanya di browser ini, tidak dipindahkan ke akun. Ada tur singkat yang bisa diulang dan pilihan mulai ulang demo.</p>
+          <span className={styles.entryEyebrow}>USAHA TUMBUH, BARENG LARIS</span>
+          <h1>Selamat datang.</h1>
+          <p className={styles.lead}>Kedai siap dibuka. Mulai dari sini.</p>
+          <div className={styles.demoEntry}>
+            <div className={styles.demoHeading}><span className={styles.demoIcon}><Coffee size={20} /></span><h2>Kenalan dulu dengan Laris</h2><span className={styles.demoBadge}>Tanpa akun</span></div>
+            <p>Coba kasir, cek stok, dan lihat laporan di kedai contoh yang sudah siap.</p>
+            <Link className={`${styles.submit} ${styles.demoPrimary}`} href="/demo" aria-describedby="demo-entry-note">Coba demo Kopi Senja<ArrowRight size={18} /></Link>
+          </div>
+          <p id="demo-entry-note" className={styles.demoNote}>Data contoh hanya di browser ini, terpisah dari akun. Tur bisa diulang dan demo bisa dimulai ulang.</p>
           <div className={styles.divider}><span>untuk usaha sendiri</span></div>
 
           {!cloudConfigured ? (
@@ -47,7 +57,7 @@ export default function LoginForm({ initialError, cloudConfigured, demoAvailable
           ) : (
             <>
               <h2 className={styles.accountHeading}>Masuk ke akun usaha</h2>
-              <p className={styles.accountNote}>Lanjutkan ke workspace cloud milikmu.</p>
+              <p className={styles.accountNote}>Lanjutkan hari baikmu bersama tim.</p>
               <form action={signIn} noValidate>
                 <label className={styles.field}>
                   <span>Email</span>

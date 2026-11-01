@@ -1,0 +1,57 @@
+{
+  "results": [
+    {
+      "viewport": "mobile",
+      "width": 390,
+      "height": 844,
+      "textSource": "gemini",
+      "passed": [
+        "demo text via live API (safe fallback allowed)",
+        "2/1/1 quantities",
+        "bulk acceptance preserves unclear payment",
+        "manual payment",
+        "quantity and note editing",
+        "double insertion blocked",
+        "close/reopen",
+        "no horizontal overflow"
+      ]
+    },
+    {
+      "viewport": "tablet",
+      "width": 768,
+      "height": 1024,
+      "textSource": "gemini",
+      "passed": [
+        "demo text via live API (safe fallback allowed)",
+        "2/1/1 quantities",
+        "bulk acceptance preserves unclear payment",
+        "manual payment",
+        "quantity and note editing",
+        "double insertion blocked",
+        "close/reopen",
+        "no horizontal overflow"
+      ]
+    },
+    {
+      "viewport": "desktop",
+      "width": 1440,
+      "height": 1000,
+      "textSource": "gemini",
+      "passed": [
+        "demo text via live API (safe fallback allowed)",
+        "2/1/1 quantities",
+        "bulk acceptance preserves unclear payment",
+        "manual payment",
+        "quantity and note editing",
+        "double insertion blocked",
+        "close/reopen",
+        "no horizontal overflow",
+        "native MediaRecorder cancellation releases tracks",
+        "no audio request on cancellation",
+        "live audio upload and notes",
+        "text invalidation"
+      ]
+    }
+  ],
+  "errors": []
+}

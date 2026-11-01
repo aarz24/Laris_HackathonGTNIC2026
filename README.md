@@ -51,8 +51,8 @@ Mode cloud diperlukan untuk akun dan data usaha persisten.
 - **Isolasi Data**: Laris menggunakan Supabase Row Level Security (RLS) secara ketat pada setiap tabel. Pengguna hanya dapat membaca dan menulis data milik `business_id` mereka sendiri.
 - **Mutasi Terproteksi**: Semua perubahan data penting (transaksi, stok, keuangan) dilakukan melalui database functions (RPC) dengan `SECURITY DEFINER` untuk menjamin integritas data dan pengecekan peran (owner/manager/kasir).
 - **Audit Log**: Setiap tindakan administratif dicatat dalam tabel audit log untuk transparansi operasional.
-- **AI Authentication**: Permintaan AI mode cloud (`/api/ai/*`) wajib memiliki sesi login dan keanggotaan workspace. Mode `/demo` tidak memerlukan login, tetapi tidak pernah memanggil Gemini. Semua endpoint AI dibatasi rate limit per pengguna/IP (in-memory per instance server; gunakan Redis/Upstash bila butuh batas global lintas instance).
-- **Gemini & Billable API**: Fitur AI yang menggunakan Gemini API (Tanya Laris dengan LLM, OCR Nota, Pesanan Suara) hanya aktif pada mode cloud untuk pengguna yang sudah masuk. Mode `/demo` lokal menggunakan logika berbasis aturan (rule-based) dan parser lokal agar tidak mengonsumsi kuota API secara tidak perlu.
+- **AI Authentication**: Permintaan AI mode cloud (`/api/ai/*`) wajib memiliki sesi login dan keanggotaan workspace. Katalog cloud selalu dimuat dari tenant yang masuk; katalog dari browser hanya diterima untuk demo lokal.
+- **Gemini demo suara**: Set `LARIS_DEMO_VOICE_AI=true` dan `GOOGLE_GENERATIVE_AI_API_KEY` di environment server untuk mengaktifkan pesanan teks/audio Gemini di `/demo`. Key tidak dikirim ke browser. Demo suara dibatasi 10 permintaan/menit per IP, 30/menit dan 120/jam per instance server; deployment banyak instance memerlukan batas bersama di gateway. Tanya Laris dan OCR demo tetap memakai fallback lokal. Audio dikirim langsung ke Gemini, tanpa disimpan oleh aplikasi.
 - **Koreksi data**: Menu, bahan, pelanggan, dan pengeluaran dihapus secara *soft delete* sehingga riwayat transaksi dan ledger stok tetap utuh. Bahan yang masih dipakai resep tidak dapat dihapus.
 
 Untuk kebutuhan demo cloud, jalankan `npm run db:seed` pada **project pengembangan**, bukan database produksi. Jika `LARIS_DEMO_EMAIL` dan `LARIS_DEMO_PASSWORD` diisi, halaman login menampilkan tombol **Masuk sebagai Juri** saat development. Pada build produksi tombol ini tersembunyi kecuali `LARIS_ALLOW_DEMO_LOGIN=true`; aktifkan hanya pada deployment khusus penjurian, bukan deployment untuk pelanggan nyata.
@@ -78,6 +78,8 @@ Lihat [.env.example](.env.example). Jangan commit `.env`, `.env.local`, service-
 | `LARIS_DEMO_EMAIL` | Judge login/seed opsional | Email akun demo cloud |
 | `LARIS_DEMO_PASSWORD` | Judge login/seed opsional | Password akun demo cloud, minimal 8 karakter |
 | `GOOGLE_GENERATIVE_AI_API_KEY` | Gemini dan OCR cloud | Opsional untuk fitur non-OCR |
+| `LARIS_DEMO_VOICE_AI` | Gemini teks/audio di `/demo` | `true` untuk demo juri; default `false` |
+| `LARIS_AI_MODEL_VOICE` | Pesanan suara/teks | Default `gemini-2.5-flash`, terpisah dari AI lain |
 | `LARIS_AI_MODEL_FAST` | AI | Default `gemini-2.5-flash` |
 | `LARIS_AI_MODEL_SMART` | AI | Default `gemini-2.5-flash` |
 

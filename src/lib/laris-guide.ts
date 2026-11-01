@@ -50,8 +50,8 @@ export const guideFeatures: GuideFeature[] = [
     description: "Ucapkan atau ketik pesanan, lalu periksa hasil sebelum masuk keranjang.",
     location: "Kasir → Ketik / suara (demo) atau Catat pakai suara (cloud)", keywords: "suara voice mikrofon mic ngomong parser ketik pesanan",
     access: "Mencatat penjualan: owner, manager, atau kasir.",
-    steps: ["Di Kasir, pilih Ketik / suara (demo) atau Catat pakai suara (cloud).", "Tekan mikrofon dan izinkan akses browser, atau ketik pesanan jika mikrofon tidak tersedia.", "Pilih Baca pesanan, lalu perbaiki bagian yang belum dikenali.", "Pilih Konfirmasi ke keranjang dan periksa pesanan sebelum pembayaran."],
-    note: "Demo memakai parser lokal, bukan Gemini. Cloud dapat memakai Gemini jika tersedia; input ketik dan pemeriksaan manual tetap tersedia.",
+    steps: ["Di Kasir, pilih Ketik / suara (demo) atau Catat pakai suara (cloud).", "Tekan mikrofon, izinkan akses, lalu sebutkan menu dan jumlah. Tekan selesai untuk memproses rekaman.", "Periksa menu, jumlah, dan catatan. Terima saran yang tepat dan pilih pembayaran jika belum jelas.", "Pilih Konfirmasi ke keranjang dan periksa pesanan sebelum pembayaran. Kamu juga bisa mengetik atau mengunggah rekaman."],
+    note: "Gemini dapat memahami rekaman dan teks, termasuk pada demo jika diaktifkan di server. Rekaman dikirim ke Gemini. Jika AI tidak tersedia, pesanan teks tetap bisa memakai parser lokal.",
   },
   {
     id: "transactions", title: "Cari transaksi & cetak struk", view: "transactions", target: "page-heading",
@@ -155,7 +155,7 @@ const demoTour: GuideFeature[] = [
   {
     id: "demo-pos", title: "Pilih menu, ketik, atau ucapkan", view: "pos", target: "pos-menu",
     location: "Kasir · menu & input pesanan", keywords: "demo kasir ketik suara",
-    description: "Tambahkan menu dengan tombol +. Pilihan Ketik / suara juga menerima pesanan tertulis jika mikrofon tidak tersedia; demo memakai parser lokal, bukan Gemini.",
+    description: "Tambahkan menu dengan tombol +. Pilihan Ketik / suara menerima pesanan tertulis atau rekaman; demo dapat memakai Gemini jika diaktifkan, dengan parser lokal sebagai cadangan untuk teks.",
     steps: ["Setelah tur, coba satu menu atau ketik pesanan lewat Ketik / suara, periksa hasilnya, lalu konfirmasi ke keranjang."],
   },
   {

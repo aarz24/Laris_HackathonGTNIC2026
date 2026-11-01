@@ -17,7 +17,9 @@ export function serverEnv() {
     serviceRoleKey: process.env.SUPABASE_SERVICE_ROLE_KEY?.trim() || "",
     appUrl: process.env.NEXT_PUBLIC_APP_URL?.trim() || "",
     googleKey: process.env.GOOGLE_GENERATIVE_AI_API_KEY?.trim() || "",
+    demoVoiceAi: process.env.LARIS_DEMO_VOICE_AI?.trim() === "true",
     modelFast: process.env.LARIS_AI_MODEL_FAST?.trim() || "gemini-2.5-flash",
+    modelVoice: process.env.LARIS_AI_MODEL_VOICE?.trim() || "gemini-2.5-flash",
     modelSmart: process.env.LARIS_AI_MODEL_SMART?.trim() || "gemini-2.5-flash",
   };
 }
