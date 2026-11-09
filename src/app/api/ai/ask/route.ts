@@ -8,6 +8,7 @@ import { currency, getStock, getSalesFinancials, getProductSales, type BusinessS
 import { aiRateLimit } from "@/lib/rate-limit";
 
 export const dynamic = "force-dynamic";
+export const maxDuration = 30;
 
 const requestSchema = z.object({
   mode: z.enum(["local", "cloud"]),

@@ -6,9 +6,15 @@ Laris adalah workspace operasional untuk UMKM F&B Indonesia. Satu alur menghubun
 
 Repository hackathon: [aarz24/Laris_HackathonGTNIC2026](https://github.com/aarz24/Laris_HackathonGTNIC2026)
 
+Website: **[laris.website](https://www.laris.website)** · [Demo tanpa akun](https://www.laris.website/demo) · [Status hosting dan setup domain](docs/hackathon/vercel-setup.md) · [Verifikasi cloud](docs/hackathon/cloud-verification-results.md)
+
+Rilis AI terbaru, **5 November 2026**: OCR nota dua item dan Tanya Laris lulus pengujian Gemini langsung di domain publik; 204 tes otomatis serta build produksi lulus. Tidak ada transaksi usaha tambahan dari pemeriksaan AI. [Hasil, bukti dan batas pengujian](docs/hackathon/cloud-ai-verification.md).
+
+Status QRIS, **9 November 2026**: perbaikan packaging dependency native `sharp` sudah di-deploy; build Vercel, 14 pemeriksaan publik dan 13 pemeriksaan browser produksi lulus. Alur unggah QRIS hingga struk membuat tepat satu penjualan fiktif; konfigurasi QR uji dinonaktifkan setelah tes. Sebelas pemeriksaan API Supabase sebelumnya dan 241 tes lokal juga lulus. Pemilik mengonfirmasi migration 0010; regresi recovery setelah akun kasir dihapus diuji lokal, belum secara live. Langkah pemilik berikutnya adalah mengunggah QRIS merchant aktif dan memverifikasi pembayaran kecil serta pencairannya; **uang asli belum diuji**. [Hasil dan batas verifikasi](docs/hackathon/manual-qris.md).
+
 ## Menjalankan Aplikasi
 
-Node.js **22.18+** diperlukan untuk menjalankan script TypeScript native.
+Gunakan Node.js **22.x (minimal 22.18)** agar sesuai runtime hosting dan script TypeScript native.
 
 ```bash
 npm install
@@ -20,6 +26,8 @@ npm run dev
 - Tanpa konfigurasi Supabase, halaman login menampilkan petunjuk setup dan akses demo; aplikasi tidak berpura-pura tersambung ke cloud.
 
 Semua pembayaran pada demo adalah simulasi. Tidak ada dana asli yang dipindahkan.
+
+QRIS pada akun cloud mendukung gambar QRIS statis merchant milik toko. Setup database memerlukan migrations `0009_manual_qris.sql` dan `0010_qris_recording_actor.sql`, lalu owner mengaktifkan QRIS di Pengaturan. Pelanggan memasukkan nominal di aplikasi pembayaran. Kasir memeriksa penerimaan dan referensi di aplikasi merchant sebelum mencatatnya di Laris; **tidak ada konfirmasi otomatis dari bank/Midtrans**. Laris tidak menarik langganan atau menampung dana. Opsi transfer masih simulasi. Lihat [panduan aktivasi dan batas verifikasi](docs/hackathon/manual-qris.md).
 
 ## Fitur
 
@@ -38,10 +46,12 @@ Semua pembayaran pada demo adalah simulasi. Tidak ada dana asli yang dipindahkan
 
 Mode cloud diperlukan untuk akun dan data usaha persisten.
 
+Runbook penjurian dan status pemeriksaan: [docs/hackathon/cloud-readiness.md](docs/hackathon/cloud-readiness.md). Jalankan `npm run check:cloud -- --production` sebelum deployment; perintah ini memeriksa konfigurasi tanpa login, mengirim email, atau mengubah database. Tambahkan `--probe` untuk tiga GET read-only ke Supabase. Tidak menggantikan pengujian tenant/peran atau status migration.
+
 1. Buat project Supabase.
 2. Salin `.env.example` menjadi `.env` dan isi URL serta publishable/anon key. Next.js dan script membaca `.env`; `.env.local` dapat dipakai untuk override lokal.
 3. Isi `NEXT_PUBLIC_APP_URL` dengan origin aplikasi. Untuk lokal, gunakan `http://localhost:3000`; untuk produksi, gunakan origin HTTPS publik.
-4. Terapkan seluruh migration di `supabase/migrations/` secara berurutan: `0001_schema.sql`, `0002_rls.sql`, `0003_functions.sql`, `0004_workspaces.sql`, `0005_production_hardening.sql`, `0006_storage.sql`, `0007_soft_delete_and_edit.sql` (hapus/ubah menu, bahan, pelanggan, pengeluaran, dan anggota tim), lalu `0008_configurable_tax.sql` (tarif pajak dari Pengaturan). Jangan hanya menerapkan migration terbaru pada database kosong. Migration 0007 dan 0008 aman dijalankan ulang.
+4. Terapkan seluruh migration di `supabase/migrations/` secara berurutan: `0001_schema.sql`, `0002_rls.sql`, `0003_functions.sql`, `0004_workspaces.sql`, `0005_production_hardening.sql`, `0006_storage.sql`, `0007_soft_delete_and_edit.sql` (hapus/ubah menu, bahan, pelanggan, pengeluaran, dan anggota tim), `0008_configurable_tax.sql` (tarif pajak dari Pengaturan), `0009_manual_qris.sql` (QRIS merchant dengan konfirmasi kasir), lalu `0010_qris_recording_actor.sql` (recovery setelah akun kasir yang mengonfirmasi dihapus). Jangan hanya menerapkan migration terbaru pada database kosong. Migration 0007 dan 0008 aman dijalankan ulang; **0009 dijalankan sekali**, dalam transaksi, dan harus dikoordinasikan dengan deployment aplikasi QRIS baru. Pada project Laris yang sudah menerima 0009, lanjutkan dengan 0010; jangan mengulang 0009.
 5. Di Supabase Auth, atur Site URL ke origin aplikasi dan tambahkan `<origin>/auth/callback` ke redirect URLs.
 6. Isi `SUPABASE_SERVICE_ROLE_KEY` hanya di environment server (seperti `.env` lokal atau variabel rahasia di platform hosting). **Key ini sangat sensitif** dan tidak pernah dikirim ke browser. Laris membutuhkannya untuk fitur administratif seperti mengundang anggota tim baru melalui email dan mengunggah gambar menu ke storage. Jika key ini tidak diisi, fitur tersebut akan menampilkan pesan error yang informatif alih-alih gagal tanpa penjelasan.
 7. Jalankan aplikasi, buka `/register`, konfirmasi email, lalu selesaikan `/onboarding`. Usaha baru tidak diisi transaksi atau pelanggan fiktif.
@@ -55,7 +65,7 @@ Mode cloud diperlukan untuk akun dan data usaha persisten.
 - **Gemini demo suara**: Set `LARIS_DEMO_VOICE_AI=true` dan `GOOGLE_GENERATIVE_AI_API_KEY` di environment server untuk mengaktifkan pesanan teks/audio Gemini di `/demo`. Key tidak dikirim ke browser. Demo suara dibatasi 10 permintaan/menit per IP, 30/menit dan 120/jam per instance server; deployment banyak instance memerlukan batas bersama di gateway. Tanya Laris dan OCR demo tetap memakai fallback lokal. Audio dikirim langsung ke Gemini, tanpa disimpan oleh aplikasi.
 - **Koreksi data**: Menu, bahan, pelanggan, dan pengeluaran dihapus secara *soft delete* sehingga riwayat transaksi dan ledger stok tetap utuh. Bahan yang masih dipakai resep tidak dapat dihapus.
 
-Untuk kebutuhan demo cloud, jalankan `npm run db:seed` pada **project pengembangan**, bukan database produksi. Jika `LARIS_DEMO_EMAIL` dan `LARIS_DEMO_PASSWORD` diisi, halaman login menampilkan tombol **Masuk sebagai Juri** saat development. Pada build produksi tombol ini tersembunyi kecuali `LARIS_ALLOW_DEMO_LOGIN=true`; aktifkan hanya pada deployment khusus penjurian, bukan deployment untuk pelanggan nyata.
+Untuk kebutuhan demo cloud, `npm run db:seed` hanya boleh digunakan pada **target uji fiktif yang sudah ditetapkan**. Script ini menghapus dan membuat ulang bisnis `kopi-senja` dan `warung-bu-sri`, serta dapat mereset password akun terkait; prosesnya bukan transaksi tunggal. Ini bukan health check. Jika `LARIS_DEMO_EMAIL` dan `LARIS_DEMO_PASSWORD` diisi, halaman login menampilkan tombol **Masuk sebagai Juri** saat development. Pada build produksi tombol ini tersembunyi kecuali `LARIS_ALLOW_DEMO_LOGIN=true`; aktifkan hanya pada deployment khusus penjurian, bukan deployment untuk pelanggan nyata. Seed hanya membuat peran owner; siapkan manager/kasir/dapur secara terpisah sesuai runbook.
 
 ## Perilaku AI dan Offline
 
@@ -64,6 +74,7 @@ Untuk kebutuhan demo cloud, jalankan `npm run db:seed` pada **project pengembang
 - OCR nota cloud memerlukan `GOOGLE_GENERATIVE_AI_API_KEY`; tanpa key, gunakan pembelian manual. Cloud tidak pernah mengganti hasil OCR dengan nota fiktif.
 - Simulasi OCR hanya tersedia di `/demo` dan ditandai jelas sebagai simulasi.
 - Kegagalan layanan cloud tidak pernah diam-diam mengganti data usaha dengan Kopi Senja.
+- Audio, foto nota, dan gambar menu dibatasi **3 MB**. Batas ini menyisakan ruang untuk base64/form data pada hosting; rekaman suara tetap maksimal 30 detik. Gunakan file lebih kecil bila ditolak, atau input manual.
 
 ## Environment Variables
 
@@ -117,7 +128,6 @@ src/lib/repo.ts                  Mapping snapshot Supabase per workspace
 supabase/migrations/             Schema, RLS, dan transaksi atomik
 scripts/                         Seed demo, evaluasi voice, dan test RLS
 evals/voice.jsonl                Dataset benchmark voice-to-cart
-PRD_Laris_GTNIC2026.md           Product requirements dan acceptance criteria
 ```
 
 ## Prinsip Produk

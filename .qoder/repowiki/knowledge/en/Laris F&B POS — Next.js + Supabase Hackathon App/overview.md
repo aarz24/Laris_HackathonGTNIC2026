@@ -1,1 +1,0 @@
-Orchestrates a Next.js 15 Turbopack frontend, Supabase PostgreSQL schema/migrations, and Node dev scripts into a single multi-tenant Laris POS prototype with Gemini AI voice parsing.

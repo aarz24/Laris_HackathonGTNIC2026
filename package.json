@@ -2,13 +2,22 @@
   "name": "hackathon_gtnic",
   "version": "0.1.0",
   "private": true,
+  "engines": {
+    "node": "22.x"
+  },
+  "overrides": {
+    "next": {
+      "postcss": "8.5.32"
+    }
+  },
   "scripts": {
     "dev": "next dev --turbopack",
     "build": "next build --turbopack",
     "start": "next start",
     "lint": "eslint",
     "typecheck": "tsc --noEmit",
-    "test": "node --test --experimental-strip-types src/lib/laris-data.test.ts src/lib/laris-guide.test.ts src/lib/ai-reliability.test.ts",
+    "test": "node --test --experimental-strip-types src/lib/laris-data.test.ts src/lib/laris-guide.test.ts src/lib/ai-reliability.test.ts src/lib/cloud-readiness.test.ts scripts/cloud-check.test.ts src/lib/qris.test.ts src/lib/qris-actions.test.ts scripts/qris-db.test.ts",
+    "check:cloud": "node --experimental-strip-types scripts/cloud-check.ts",
     "db:seed": "node --experimental-strip-types --env-file=.env scripts/seed.ts",
     "test:rls": "node --test --experimental-strip-types --env-file=.env scripts/rls.test.ts",
     "eval:voice": "node --experimental-strip-types --env-file=.env scripts/eval-voice.ts"
@@ -18,17 +27,22 @@
     "@supabase/ssr": "^0.12.7",
     "@supabase/supabase-js": "^2.118.0",
     "ai": "^7.0.143",
+    "jsqr": "^1.4.0",
     "lucide-react": "^1.59.0",
     "next": "15.5.28",
+    "qrcode": "^1.5.4",
     "react": "19.1.0",
     "react-dom": "19.1.0",
     "server-only": "^0.0.1",
+    "sharp": "^0.35.5",
     "zod": "^4.6.7"
   },
   "devDependencies": {
+    "@electric-sql/pglite": "^0.5.15",
     "@eslint/eslintrc": "^3",
     "@tailwindcss/postcss": "^4",
     "@types/node": "^20",
+    "@types/qrcode": "^1.5.6",
     "@types/react": "^19",
     "@types/react-dom": "^19",
     "eslint": "^9",

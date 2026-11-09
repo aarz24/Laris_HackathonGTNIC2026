@@ -1,5 +1,7 @@
+import { MAX_UPLOAD_BYTES } from "./upload-limits.ts";
+
 export const MAX_RECORDING_SECONDS = 30;
-export const MAX_RECORDING_BYTES = 8 * 1024 * 1024;
+export const MAX_RECORDING_BYTES = MAX_UPLOAD_BYTES;
 export interface VoiceRecording { finish: () => void; cancel: () => void }
 
 /** Returns before permission resolves so close/edit/unmount can cancel even a pending permission prompt. */
@@ -63,7 +65,7 @@ export function createVoiceRecording(callbacks: {
 }
 
 export async function voiceAudioPayload(audio: Blob): Promise<{ audio: string; mimeType: string }> {
-  if (!audio.size || audio.size > MAX_RECORDING_BYTES) throw new Error("Ukuran rekaman tidak valid.");
+  if (!audio.size || audio.size > MAX_RECORDING_BYTES) throw new Error("Rekaman harus berisi audio dan berukuran maksimal 3 MB.");
   const bytes = new Uint8Array(await audio.arrayBuffer());
   let binary = "";
   for (let start = 0; start < bytes.length; start += 8192) binary += String.fromCharCode(...bytes.subarray(start, start + 8192));

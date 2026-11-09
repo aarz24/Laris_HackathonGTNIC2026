@@ -1,1 +1,0 @@
-Next.js 15 with Turbopack, React 19, Tailwind v4, Supabase JS client (`@supabase/ssr`), Vercel AI SDK v7 with Google Gemini, Zod v4, TypeScript 5; all children share these dependencies through the root `package.json`.

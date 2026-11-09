@@ -753,6 +753,126 @@ test("natural interpretation cannot clear invalid quantities, inactive products 
   assert.equal(draft.rows[0].accepted, false); assert.equal(draft.paymentAccepted, false);
 });
 
+test("natural interpretation accepts either connector placement while preserving raw evidence and review", () => {
+  const text = "dua es kopy susuh kurang manis dan satu bater kroisan, bayar tunai";
+  for (const raw of ["dan satu bater kroisan", "satu bater kroisan"]) {
+    const proposal: VoiceOrderProposal = { lines: [
+      { sourceId: "coffee", raw: "dua es kopy susuh kurang manis", quantity: 2, productId: "kopi-susu", note: "less sugar" },
+      { sourceId: "pastry", raw, quantity: 1, productId: "croissant" },
+    ], payment: { method: "Tunai", raw: ["bayar tunai"] } };
+    const before = JSON.stringify(proposal);
+    const result = interpretVoiceOrder(text, proposal, products);
+    assert.deepEqual(result.review.lines.map(line => [line.id, line.raw, line.quantity, line.status, line.issue]), [
+      ["coffee", proposal.lines[0].raw, 2, "suggested", undefined], ["pastry", raw, 1, "suggested", undefined],
+    ]);
+    assert.equal(result.review.lines[0].note, "less sugar");
+    assert.equal(result.review.payment.status, "explicit");
+    assert.equal(result.review.payment.method, "Tunai");
+    assert.deepEqual(result.items, [], "AI typo suggestions are not cart items");
+    assert.deepEqual(result.unknown, proposal.lines.map(line => line.raw));
+    assert.deepEqual(validateVoiceOrderResponse(result, products), result);
+    const draft = createVoiceOrderDraft(result.review, products);
+    assert.ok(draft.rows.every(row => !row.accepted));
+    assert.equal(validateVoiceOrderDraft(result.review, draft, products).ok, false);
+    assert.deepEqual(validateVoiceOrderDraft(result.review, acceptVoiceSuggestions(result.review, draft), products), {
+      ok: true, items: [{ productId: "kopi-susu", quantity: 2, note: "less sugar" }, { productId: "croissant", quantity: 1 }], payment: "Tunai",
+    });
+    assert.equal(JSON.stringify(proposal), before);
+    assert.equal(result.review.lines[1].raw, raw, "accepting a draft never rewrites source evidence");
+  }
+});
+
+test("natural interpretation handles only explicit leading connectors and retains exact-line raw", () => {
+  for (const connector of ["dan", "sama", "lalu", "kemudian", "&", "+", "DAN"]) {
+    const raw = `${connector} dua kopsu`;
+    const result = interpretVoiceOrder(raw, { lines: [{ sourceId: "coffee", raw, quantity: 2, productId: "kopi-susu" }], payment: { method: null, raw: [] } }, products);
+    assert.deepEqual(result.items, [{ productId: "kopi-susu", quantity: 2 }]);
+    assert.equal(result.review.lines[0].raw, raw);
+    assert.equal(result.review.lines[0].id, "coffee");
+  }
+  for (const raw of ["tambahkan dua kopsu", "dan dan dua kopsu"]) {
+    const result = interpretVoiceOrder(raw, { lines: [{ sourceId: "coffee", raw, quantity: 2, productId: "kopi-susu" }], payment: { method: null, raw: [] } }, products);
+    assert.equal(result.review.lines[0].status, "invalid", raw);
+    assert.equal(result.review.lines[0].raw, raw);
+  }
+});
+
+test("natural interpretation preserves catalogue names and aliases containing or beginning with connectors", () => {
+  for (const name of ["Dan Kopi", "Sama Rasa", "Lalu Latte", "Kemudian Kopi", "& Kopi", "+ Kopi", "Roti dan Kopi", "Roti & Kopi", "Roti + Kopi", "Dan 2", "Dan Satu"]) {
+    const catalog: VoiceCatalog = [{ id: "custom", name }, ...products];
+    for (const raw of [`dua ${name}`, `${name} dua`, `dan dua ${name}`]) {
+      const result = interpretVoiceOrder(raw, { lines: [{ sourceId: "custom-line", raw, quantity: 2, productId: "custom" }], payment: { method: null, raw: [] } }, catalog);
+      assert.deepEqual(result.items, [{ productId: "custom", quantity: 2 }], raw);
+      assert.equal(result.review.lines[0].raw, raw);
+    }
+  }
+  const catalog: VoiceCatalog = [{ id: "combo", name: "Paket Sarapan", aliases: ["Roti dan Kopi"] }];
+  const raw = "dan dua Roti dan Kopi";
+  assert.deepEqual(interpretVoiceOrder(raw, { lines: [{ sourceId: "combo", raw, quantity: 2, productId: "combo" }], payment: { method: null, raw: [] } }, catalog).items, [{ productId: "combo", quantity: 2 }]);
+});
+
+test("leading connectors cannot hide multi-menu boundaries or embedded payment evidence", () => {
+  for (const raw of ["dan satu kopsu dua croissant", "dan satu kopsu dan dua croissant", "dan satu kopsu bayar tunai"]) {
+    assert.throws(() => interpretVoiceOrder(raw, { lines: [{ sourceId: "a", raw, quantity: 1, productId: "kopi-susu" }], payment: { method: null, raw: [] } }, products), error => error instanceof VoiceOrderError && error.code === "invalid-proposal", raw);
+  }
+  const raw = "dan kopsu dua croissant";
+  const result = interpretVoiceOrder(raw, { lines: [{ sourceId: "a", raw, quantity: 2, productId: "kopi-susu" }], payment: { method: null, raw: [] } }, products);
+  assert.equal(result.review.lines[0].issue, "boundary");
+  assert.equal(result.review.lines[0].quantity, null);
+  assert.equal(result.review.lines[0].raw, raw);
+});
+
+test("leading connectors retain invalid quantities, unavailable names, unknown menus and collisions", () => {
+  for (const quantity of ["0", "-2", "1,5", "1000", "dua tiga"]) {
+    const raw = `dan ${quantity} kopsu`;
+    const result = interpretVoiceOrder(raw, { lines: [{ sourceId: "a", raw, quantity: 2, productId: "kopi-susu" }], payment: { method: null, raw: [] } }, products);
+    assert.equal(result.review.lines[0].issue, "quantity", raw);
+    assert.equal(result.review.lines[0].quantity, null);
+    assert.equal(result.review.lines[0].raw, raw);
+    assert.equal(acceptVoiceSuggestions(result.review, createVoiceOrderDraft(result.review, products)).rows[0].accepted, false);
+  }
+  const raw = "dan satu pizza";
+  const unknown = interpretVoiceOrder(raw, { lines: [{ sourceId: "a", raw, quantity: 1, productId: null }], payment: { method: null, raw: [] } }, products);
+  assert.equal(unknown.review.lines[0].status, "unknown");
+  assert.equal(acceptVoiceSuggestions(unknown.review, createVoiceOrderDraft(unknown.review, products)).rows[0].accepted, false);
+  const inactive: VoiceCatalog = [{ id: "closed", name: "Roti dan Kopi", active: false }, ...products];
+  const unavailableRaw = "dan satu Roti dan Kopi";
+  const unavailableProposal = { lines: [{ sourceId: "a", raw: unavailableRaw, quantity: 1, productId: null }], payment: { method: null, raw: [] } };
+  const unavailable = interpretVoiceOrder(unavailableRaw, unavailableProposal, inactive);
+  assert.equal(unavailable.review.lines[0].issue, "unavailable");
+  assert.equal(unavailable.review.lines[0].raw, unavailableRaw);
+  assert.throws(() => interpretVoiceOrder(unavailableRaw, { ...unavailableProposal, lines: [{ ...unavailableProposal.lines[0], productId: "closed" }] }, inactive), VoiceOrderError);
+  const collision: VoiceCatalog = [{ id: "a", name: "Roti dan Kopi" }, { id: "b", name: "Roti dan Kopi" }];
+  const ambiguous = interpretVoiceOrder(unavailableRaw, { ...unavailableProposal, lines: [{ ...unavailableProposal.lines[0], productId: "a" }] }, collision);
+  assert.equal(ambiguous.review.lines[0].status, "ambiguous");
+  assert.deepEqual(ambiguous.review.lines[0].candidates.map(candidate => candidate.productId), ["a", "b"]);
+  assert.equal(ambiguous.review.lines[0].raw, unavailableRaw);
+  assert.equal(acceptVoiceSuggestions(ambiguous.review, createVoiceOrderDraft(ambiguous.review, collision)).rows[0].accepted, false);
+});
+
+test("leading connectors do not relax source coverage, quantity conflicts, payment or audio review", () => {
+  const raw = "dan dua kopsu";
+  const proposal: VoiceOrderProposal = { lines: [{ sourceId: "a", raw, quantity: 3, productId: "kopi-susu" }], payment: { method: "QRIS", raw: ["bayar tunai qris"] } };
+  const text = `${raw}, bayar tunai qris`;
+  const result = interpretVoiceOrder(text, proposal, products);
+  assert.equal(result.review.lines[0].quantity, 2);
+  assert.equal(result.review.lines[0].issue, "quantity");
+  assert.equal(result.review.payment.status, "conflicting");
+  const draft = acceptVoiceSuggestions(result.review, createVoiceOrderDraft(result.review, products));
+  assert.equal(draft.rows[0].accepted, false);
+  assert.equal(draft.paymentAccepted, false);
+  assert.throws(() => interpretVoiceOrder(`${text}, satu pizza`, proposal, products), VoiceOrderError);
+  assert.throws(() => interpretVoiceOrder(text, { ...proposal, lines: [...proposal.lines, { ...proposal.lines[0], sourceId: "duplicate" }] }, products), VoiceOrderError);
+  assert.throws(() => interpretVoiceOrder(text, { ...proposal, lines: [{ ...proposal.lines[0], raw: "dan dua kopi susu" }] }, products), VoiceOrderError);
+  const audio = interpretVoiceOrder(null, { lines: [{ sourceId: "a", raw, quantity: 2, productId: "kopi-susu" }], payment: { method: "Tunai", raw: ["bayar tunai"] } }, products);
+  const audioDraft = createVoiceOrderDraft(audio.review, products);
+  assert.deepEqual(audio.items, []);
+  assert.equal(audio.review.lines[0].raw, raw);
+  assert.equal(audioDraft.rows[0].accepted, false);
+  assert.equal(audioDraft.paymentAccepted, false);
+  assert.equal(validateVoiceOrderDraft(audio.review, audioDraft, products).ok, false);
+});
+
 test("CSV round-trips commas, quotes, newlines, rupiah and menu notes", () => {
   const { state, sale } = completeSale(emptyState(), {
     ...cashInput, customerName: 'Nadia, "Dago"\nBandung',

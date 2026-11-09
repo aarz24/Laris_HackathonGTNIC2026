@@ -37,6 +37,18 @@ yarn-error.log*
 # vercel
 .vercel
 
+# local planning and submission artifacts
+/plans/
+/proposal/
+/deliverables/
+/docs/hackathon/
+/.qoder/
+/implementation_plan.md
+/PRD_Laris_GTNIC2026.md
+/UI_POLISH_RULES.md
+/TEAMMATE_PROMPTS.md
+/*.pdf
+
 # typescript
 *.tsbuildinfo
 next-env.d.ts

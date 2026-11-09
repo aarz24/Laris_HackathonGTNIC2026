@@ -12,6 +12,7 @@ import {
 } from "@/lib/repo";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { createClient } from "@/lib/supabase/server";
+import { MAX_UPLOAD_BYTES } from "@/lib/upload-limits";
 
 export type ActionResult<T> = { ok: true; data: T } | { ok: false; error: string };
 
@@ -53,6 +54,7 @@ const saleInput = z.object({
 export async function completeSaleAction(raw: z.input<typeof saleInput>): Promise<ActionResult<{ sale: Sale; stockMovements: StockMovement[]; customer: Customer | null }>> {
   return run(async () => {
     const input = saleInput.parse(raw);
+    if (input.payment === "QRIS") throw new Error("Gunakan permintaan QRIS dan periksa pembayaran masuk sebelum konfirmasi.");
     const { supabase, membership } = await context(["owner", "manager", "kasir"]);
     const { data: orderId, error } = await supabase.rpc("complete_sale", {
       p_business_id: membership.businessId,
@@ -248,7 +250,7 @@ export async function uploadMenuImageAction(form: FormData): Promise<ActionResul
     if (!(file instanceof File) || file.size === 0) throw new Error("Pilih berkas gambar terlebih dahulu.");
     const ext = MENU_IMAGE_EXT[file.type];
     if (!ext) throw new Error("Format gambar harus JPG, PNG, WebP, atau GIF.");
-    if (file.size > 5 * 1024 * 1024) throw new Error("Ukuran gambar maksimal 5 MB.");
+    if (file.size > MAX_UPLOAD_BYTES) throw new Error("Ukuran gambar maksimal 3 MB.");
     const { membership } = await context(["owner", "manager"]);
     const admin = (() => {
       try { return createAdminClient(); }
