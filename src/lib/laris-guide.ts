@@ -43,7 +43,7 @@ export const guideFeatures: GuideFeature[] = [
     location: "Kasir → Lanjut pembayaran", keywords: "kasir pos jual transaksi pesanan checkout bayar tunai qris transfer diskon pajak cashier payment",
     access: "Mencatat penjualan: owner, manager, atau kasir.",
     steps: ["Buka Kasir, cari menu dan tekan tombol + untuk memasukkannya ke keranjang.", "Periksa jumlah, catatan, diskon, dan pajak sebelum memilih Lanjut pembayaran.", "Pilih metode pembayaran. Untuk tunai, isi uang diterima; kembalian dihitung otomatis.", "Konfirmasi hanya jika pesanan benar. Transaksi dan pergerakan stok baru dicatat setelah konfirmasi."],
-    note: "QRIS dan transfer masih simulasi, bukan integrasi bank. Tidak ada dana yang dipindahkan oleh Laris.",
+    note: "Cloud: owner mengunggah QRIS merchant di Pengaturan. Kasir menyimpan permintaan, memeriksa nominal dan referensi di aplikasi merchant, lalu mengonfirmasi penerimaan. Laris tidak memverifikasi pembayaran otomatis. Semua pembayaran demo dan opsi transfer masih simulasi.",
   },
   {
     id: "voice", title: "Catat pesanan dengan suara", view: "pos", target: "page-heading", dialog: "voice",

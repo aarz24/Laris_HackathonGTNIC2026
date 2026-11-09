@@ -520,10 +520,19 @@ export function interpretVoiceOrder(text: string | null, value: unknown, catalog
   const remainder = [...source].map((char, i) => occupied.has(i) ? " " : char).join("");
   // Connectors may fall between source fragments. Menu words, modifiers and numbers may not disappear.
   if (remainder.replace(/\b(?:dan|sama|lalu|kemudian)\b/g, "").replace(/[\s,;.?!&+]/g, "")) throw new VoiceOrderError("invalid-proposal", "Ada bagian pesanan yang belum ditinjau.");
+  const index = catalogIndex(catalog);
   const lines = proposed.review.lines.map(line => {
-    const local = parseVoiceOrder(line.raw, catalog).review;
+    const normalized = normalize(line.raw);
+    // A connector can belong to either adjacent source fragment. Strip only one
+    // for parsing, never a catalogue-name token or the evidence shown for review.
+    const fragment = protectedTokens(normalized.split(" "), index).has(0) ? line.raw : normalized.replace(/^(?:dan|sama|lalu|kemudian|&|\+)\s+/, "");
+    const whole = parseLine(fragment, line.id, index);
+    // Exact catalogue phrases can themselves contain connectors. All other
+    // fragments still pass through the multi-order and payment boundary checks.
+    const catalogPhrase = whole.status === "exact" || whole.issue === "unavailable" || (whole.status === "ambiguous" && whole.candidates.every(candidate => candidate.score === 1));
+    const local = catalogPhrase ? { lines: [whole], payment: { raw: [] } } : parseVoiceOrder(fragment, catalog).review;
     if (local.lines.length !== 1 || local.payment.raw.length) throw new VoiceOrderError("invalid-proposal", "Batas baris pesanan AI belum jelas.");
-    const evidence = local.lines[0];
+    const evidence = { ...local.lines[0], raw: line.raw };
     if (evidence.status === "invalid" || evidence.issue === "unavailable") return { ...evidence, id: line.id };
     if (evidence.quantity !== line.quantity) return { ...line, quantity: evidence.quantity, issue: "quantity" as const };
     if (evidence.status === "exact" && evidence.productId === line.candidates[0]?.productId && (evidence.note ?? "") === (line.note ?? "")) return { ...evidence, id: line.id };

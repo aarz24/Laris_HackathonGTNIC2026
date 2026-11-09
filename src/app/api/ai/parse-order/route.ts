@@ -7,12 +7,14 @@ import { parseOrderFallback } from "@/lib/ai-fallbacks";
 import { applyVoiceOrderProposal, interpretVoiceOrder, parseVoiceOrder, VoiceOrderError } from "@/lib/voice-order";
 import { serverEnv } from "@/lib/env";
 import { aiRateLimit } from "@/lib/rate-limit";
+import { MAX_UPLOAD_BYTES, MAX_AI_BODY_BYTES } from "@/lib/upload-limits";
 
 export const dynamic = "force-dynamic";
+export const maxDuration = 30;
 
 const MAX_TEXT = 2000;
-const MAX_AUDIO_BYTES = 8 * 1024 * 1024;
-const MAX_BODY_BYTES = 12 * 1024 * 1024;
+const MAX_AUDIO_BYTES = MAX_UPLOAD_BYTES;
+const MAX_BODY_BYTES = MAX_AI_BODY_BYTES;
 const audioMimes = ["audio/webm", "audio/ogg", "audio/mp4", "audio/mpeg", "audio/wav", "audio/x-wav"] as const;
 
 const requestSchema = z.object({
@@ -47,7 +49,7 @@ export async function POST(request: NextRequest) {
 async function handleRequest(request: NextRequest, routeSignal: AbortSignal) {
   const start = Date.now();
   const contentLength = Number(request.headers.get("content-length") ?? 0);
-  if (contentLength > MAX_BODY_BYTES) return NextResponse.json({ error: "Ukuran permintaan maksimal 12 MB." }, { status: 413 });
+  if (contentLength > MAX_BODY_BYTES) return NextResponse.json({ error: "Permintaan terlalu besar. Gunakan rekaman maksimal 3 MB." }, { status: 413 });
 
   let input: z.infer<typeof requestSchema>;
   try {
@@ -64,7 +66,7 @@ async function handleRequest(request: NextRequest, routeSignal: AbortSignal) {
     if (!/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(audioBase64)) return NextResponse.json({ error: "Format rekaman tidak valid." }, { status: 400 });
     const audioBytes = Buffer.from(audioBase64, "base64").byteLength;
     if (!audioBytes) return NextResponse.json({ error: "Rekaman audio kosong atau tidak valid." }, { status: 400 });
-    if (audioBytes > MAX_AUDIO_BYTES) return NextResponse.json({ error: "Ukuran audio maksimal 8 MB." }, { status: 413 });
+    if (audioBytes > MAX_AUDIO_BYTES) return NextResponse.json({ error: "Ukuran audio maksimal 3 MB." }, { status: 413 });
   }
 
   const limited = await waitForSignal(routeSignal, () => aiRateLimit(request, "parse-order", input.mode));

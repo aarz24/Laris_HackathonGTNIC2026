@@ -6,13 +6,31 @@ import { aiFailureReason, generationOptions, waitForSignal } from "@/lib/ai-requ
 import { receiptFailure } from "@/lib/ai-fallbacks";
 import type { InventoryItem } from "@/lib/laris-data";
 import { aiRateLimit } from "@/lib/rate-limit";
+import { MAX_UPLOAD_BYTES, MAX_AI_BODY_BYTES } from "@/lib/upload-limits";
 
 export const dynamic = "force-dynamic";
+export const maxDuration = 30;
 
-const MAX_IMAGE_BYTES = 8 * 1024 * 1024;
-const MAX_BODY_BYTES = 12 * 1024 * 1024;
+const MAX_IMAGE_BYTES = MAX_UPLOAD_BYTES;
+const MAX_BODY_BYTES = MAX_AI_BODY_BYTES;
 const imageMimes = ["image/jpeg", "image/png", "image/webp"] as const;
 const modeSchema = z.enum(["local", "cloud"]);
+
+// Gemini's constrained decoder rejects the full bounded schema below. Keep its
+// grammar simple, then enforce every bound on the server before processing rows.
+const receiptExtractionSchema = z.object({
+  supplierName: z.string().optional().describe("Nama toko atau supplier yang tercetak"),
+  receiptDate: z.string().optional().describe("Tanggal nota YYYY-MM-DD jika terbaca"),
+  lines: z.array(z.object({
+    rawName: z.string(),
+    matchedInventoryCode: z.string().nullable(),
+    quantity: z.number(),
+    unit: z.string(),
+    unitPrice: z.number(),
+    totalPrice: z.number(),
+  })),
+  totalReceipt: z.number(),
+});
 
 const receiptSchema = z.object({
   supplierName: z.string().max(200).optional().describe("Nama toko atau supplier yang tercetak"),
@@ -61,7 +79,7 @@ export async function POST(request: NextRequest) {
 async function handleRequest(request: NextRequest, routeSignal: AbortSignal) {
   const start = Date.now();
   const contentLength = Number(request.headers.get("content-length") ?? 0);
-  if (contentLength > MAX_BODY_BYTES) return NextResponse.json({ error: "Ukuran permintaan maksimal 12 MB." }, { status: 413 });
+  if (contentLength > MAX_BODY_BYTES) return NextResponse.json({ error: "Permintaan terlalu besar. Gunakan foto maksimal 3 MB." }, { status: 413 });
 
   let imageBase64 = "";
   let mimeType = "";
@@ -73,7 +91,7 @@ async function handleRequest(request: NextRequest, routeSignal: AbortSignal) {
       rawMode = formData.get("mode");
       const file = formData.get("file");
       if (file instanceof File) {
-        if (file.size > MAX_IMAGE_BYTES) return NextResponse.json({ error: "Ukuran foto maksimal 8 MB." }, { status: 413 });
+        if (file.size > MAX_IMAGE_BYTES) return NextResponse.json({ error: "Ukuran foto maksimal 3 MB." }, { status: 413 });
         if (!imageMimes.includes(file.type as typeof imageMimes[number])) return NextResponse.json({ error: "Gunakan foto nota berformat JPG, PNG, atau WebP." }, { status: 415 });
         const buffer = Buffer.from(await waitForSignal(routeSignal, () => file.arrayBuffer()));
         imageBase64 = buffer.toString("base64");
@@ -101,7 +119,7 @@ async function handleRequest(request: NextRequest, routeSignal: AbortSignal) {
   if (!imageMimes.includes(mimeType as typeof imageMimes[number])) return NextResponse.json({ error: "Gunakan foto nota berformat JPG, PNG, atau WebP." }, { status: 415 });
   const imageBytes = Buffer.from(imageBase64, "base64").byteLength;
   if (!imageBytes) return NextResponse.json({ error: "Gambar kosong atau tidak valid." }, { status: 400 });
-  if (imageBytes > MAX_IMAGE_BYTES) return NextResponse.json({ error: "Ukuran foto maksimal 8 MB." }, { status: 413 });
+  if (imageBytes > MAX_IMAGE_BYTES) return NextResponse.json({ error: "Ukuran foto maksimal 3 MB." }, { status: 413 });
 
   const limited = await waitForSignal(routeSignal, () => aiRateLimit(request, "scan-receipt", parsedMode.data));
   if (limited) return limited;
@@ -153,7 +171,14 @@ async function handleRequest(request: NextRequest, routeSignal: AbortSignal) {
     const result = await waitForSignal(routeSignal, () => generateText({
       ...generationOptions(routeSignal),
       model: googleSetup.model,
-      output: Output.object({ schema: receiptSchema }),
+      // Keep extraction within its short deadline using each model's supported
+      // thinking control. Gemini 3 retains its default temperature.
+      ...(googleSetup.modelId.startsWith("gemini-2.5-flash")
+        ? { temperature: 0, providerOptions: { google: { thinkingConfig: { thinkingBudget: 0 } } } }
+        : /^gemini-3(?:\.\d+)?-flash(?:-|$)/.test(googleSetup.modelId)
+          ? { providerOptions: { google: { thinkingConfig: { thinkingLevel: "low" } } } }
+          : {}),
+      output: Output.object({ schema: receiptExtractionSchema }),
       instructions: `Kamu adalah asisten pembelian untuk ${context.state.business.name}.
 Baca foto struk, faktur, atau nota belanja. Ekstrak supplier, tanggal, setiap baris barang, kuantitas, satuan, harga satuan, dan total.
 
@@ -171,7 +196,7 @@ Pertahankan angka seperti pada nota dan jangan mengarang baris yang tidak terlih
       }],
     }));
 
-    const parsed = result.output;
+    const parsed = receiptSchema.parse(result.output);
     const processedLines: Array<Record<string, unknown>> = [];
     const skippedLines: string[] = [];
     for (const line of parsed.lines) {

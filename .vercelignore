@@ -1,0 +1,33 @@
+# Credentials must be configured through Vercel Environment Variables.
+.env
+.env.*
+**/.env
+**/.env.*
+*.pem
+*.key
+
+# Local build output, dependencies, editor/agent state, and QA artifacts.
+.git
+.next
+.vercel
+node_modules
+build
+out
+coverage
+.qoder
+.agents
+.codex
+.aws
+*.tsbuildinfo
+*.log
+
+# Submission materials are not part of the Next.js deployment.
+docs
+deliverables
+proposal
+plans
+vibe_images
+*.pdf
+*.md
+
+# Keep src, public, scripts, evals, and all package/build configuration.

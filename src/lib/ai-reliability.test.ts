@@ -11,6 +11,7 @@ import * as requests from "./ai-request.ts";
 import * as fallbacks from "./ai-fallbacks.ts";
 import * as data from "./laris-data.ts";
 import * as voice from "./voice-order.ts";
+import * as uploadLimits from "./upload-limits.ts";
 import { createVoiceRecording, voiceAudioPayload, type VoiceRecording } from "./voice-recorder.ts";
 import { resetDemoSession } from "./laris-guide.ts";
 import type { AiContext } from "./ai";
@@ -82,6 +83,8 @@ interface GenerationCall {
   abortSignal: AbortSignal;
   stopWhen?: number;
   output?: unknown;
+  temperature?: number;
+  providerOptions?: { google?: { thinkingConfig?: { thinkingBudget?: number; thinkingLevel?: string } } };
   instructions: string;
   messages?: { role: string; content: { type: string; text?: string }[] }[];
   tools?: Record<string, { execute: (input: { days: number }) => Promise<Record<string, unknown>> }>;
@@ -95,6 +98,7 @@ function routeHarness(feature: Feature, options: {
   rateLimit?: () => Promise<Response | null>;
   provider?: (call: GenerationCall) => Promise<unknown>;
   modelAvailable?: boolean;
+  modelId?: string;
   local?: boolean;
   demoAi?: boolean;
 } = {}) {
@@ -111,7 +115,7 @@ function routeHarness(feature: Feature, options: {
     },
     "@/lib/ai": {
       ...server,
-      getGoogleModel: () => options.modelAvailable === false ? null : { model: "offline-model", modelId: "offline-model" },
+      getGoogleModel: () => options.modelAvailable === false ? null : { model: "offline-model", modelId: options.modelId ?? "offline-model" },
       requireAiContext: async () => {
         contextCalls++;
         if (options.contextStatus) throw new server.AiRequestError("Auth or context unavailable", options.contextStatus);
@@ -119,6 +123,7 @@ function routeHarness(feature: Feature, options: {
       },
     },
     "@/lib/ai-request": requests, "@/lib/ai-fallbacks": fallbacks, "@/lib/laris-data": data, "@/lib/voice-order": voice,
+    "@/lib/upload-limits": uploadLimits,
     "@/lib/env": { serverEnv: () => ({ demoVoiceAi: options.demoAi ?? false }) },
     "@/lib/rate-limit": { aiRateLimit: async () => options.rateLimit ? options.rateLimit() : options.limited ?? null },
   });
@@ -472,6 +477,25 @@ test("parse-order: limits reject the entire request before any provider invocati
   }
 });
 
+test("hosted audio and receipt upload limits reject oversized files before auth or provider calls", async () => {
+  const overLimit = Buffer.alloc(3 * 1024 * 1024 + 1).toString("base64");
+  for (const feature of ["parse-order", "scan-receipt"] as const) {
+    const route = routeHarness(feature);
+    const input = feature === "parse-order" ? { text: "", audio: overLimit, mimeType: "audio/webm" } : { image: overLimit, mimeType: "image/jpeg" };
+    const response = await route.POST(requestFor(feature, undefined, input));
+    assert.equal(response.status, 413);
+    assert.match((await response.json()).error, /3 MB/);
+    assert.equal(route.calls.length, 0); assert.equal(route.contextCalls(), 0);
+    const request = requestFor(feature);
+    request.headers.set("content-length", "4400001");
+    assert.equal((await route.POST(request)).status, 413);
+  }
+  await assert.rejects(voiceAudioPayload(new Blob([new Uint8Array(3 * 1024 * 1024 + 1)], { type: "audio/webm" })), /3 MB/);
+  const payload = await voiceAudioPayload(new Blob([new Uint8Array(3 * 1024 * 1024)], { type: "audio/webm" }));
+  assert.equal(payload.audio.length, 4 * 1024 * 1024);
+  assert.ok(Buffer.byteLength(JSON.stringify({ ...payload, mode: "cloud", text: "" })) < 4_400_000);
+});
+
 test("demo voice AI is opt-in, uses the browser demo catalogue, and retains review", async () => {
   const catalog = [{ id: "demo-special", name: "Kopi Spesial", active: true }];
   const output = { lines: [{ sourceId: "line-1", raw: "dua kopi spesial", quantity: 2, productId: "demo-special" }], payment: { method: "QRIS", raw: ["bayar qris"] } };
@@ -487,6 +511,41 @@ test("demo voice AI is opt-in, uses the browser demo catalogue, and retains revi
   const cloud = routeHarness("parse-order", { modelAvailable: false });
   const tenant = await (await cloud.POST(requestFor("parse-order", undefined, { text: "dua nasi tenant", catalog }))).json();
   assert.equal(tenant.items[0].productId, "tenant-meal", "client catalogue never overrides cloud scope");
+});
+
+test("parse-order: leading connector proposals retain review in demo and authenticated cloud modes", async () => {
+  const text = "dua es kopy susuh kurang manis dan satu bater kroisan, bayar tunai";
+  const catalog = data.products.map(({ id, name, active }) => ({ id, name, active }));
+  for (const local of [true, false]) for (const raw of ["dan satu bater kroisan", "satu bater kroisan"]) {
+    const output: voice.VoiceOrderProposal = { lines: [
+      { sourceId: "coffee", raw: "dua es kopy susuh kurang manis", quantity: 2, productId: "kopi-susu", note: "less sugar" },
+      { sourceId: "pastry", raw, quantity: 1, productId: "croissant" },
+    ], payment: { method: "Tunai", raw: ["bayar tunai"] } };
+    const route = routeHarness("parse-order", {
+      local, demoAi: local, state: { ...tenantState(), products: data.products },
+      provider: async () => ({ output }),
+    });
+    const response = await route.POST(requestFor("parse-order", undefined, {
+      mode: local ? "local" : "cloud", interpret: true, text,
+      catalog: local ? catalog : [{ id: "outside-workspace", name: "Injected Browser Menu", active: true }],
+    }));
+    const body = await response.json();
+    assert.equal(response.status, 200); assert.equal(body.source, "gemini"); assert.equal(route.calls.length, 1);
+    assert.doesNotMatch(route.calls[0].instructions, /outside-workspace|Injected Browser Menu/);
+    const result = voice.validateVoiceOrderResponse(body, data.products);
+    assert.deepEqual(result.items, []);
+    assert.deepEqual(result.review.lines.map(line => [line.raw, line.quantity, line.status, line.issue]), [
+      [output.lines[0].raw, 2, "suggested", undefined], [raw, 1, "suggested", undefined],
+    ]);
+    assert.equal(result.review.lines[0].note, "less sugar");
+    assert.equal(result.review.payment.method, "Tunai");
+    const draft = voice.createVoiceOrderDraft(result.review, data.products);
+    assert.ok(draft.rows.every(row => !row.accepted));
+    assert.equal(voice.validateVoiceOrderDraft(result.review, draft, data.products).ok, false);
+    assert.deepEqual(voice.validateVoiceOrderDraft(result.review, voice.acceptVoiceSuggestions(result.review, draft), data.products), {
+      ok: true, items: [{ productId: "kopi-susu", quantity: 2, note: "less sugar" }, { productId: "croissant", quantity: 1 }], payment: "Tunai",
+    });
+  }
 });
 
 test("demo audio reaches Gemini once and every proposed menu still requires acceptance", async () => {
@@ -545,6 +604,67 @@ test("OCR success omits absent supplier/date rather than inventing them", async 
   const body = await response.json();
   assert.equal(response.status, 200); assert.equal(body.supplierName, undefined); assert.equal(body.receiptDate, undefined);
   assert.deepEqual(body.lines, []);
+});
+
+test("OCR extracts every matched line and normalizes units with a model-compatible latency budget", async () => {
+  for (const modelId of ["gemini-2.5-flash", "gemini-2.5-flash-lite", "gemini-3-flash-preview", "gemini-3.8-flash", "gemini-2.5-pro", "offline-model"]) {
+    const state = tenantState();
+    state.inventory!.push({ id: "tenant-milk", name: "Susu tenant", unit: "ml", cost: 20, openingStock: 1000, reorderPoint: 100, supplier: "Tenant Supplier" });
+    const before = structuredClone(state);
+    const route = routeHarness("scan-receipt", { modelId, state, provider: async () => ({ output: {
+      lines: [
+        { rawName: "Beras tenant", matchedInventoryCode: "tenant-rice", quantity: 2, unit: "kg", unitPrice: 15000, totalPrice: 30000 },
+        { rawName: "Susu tenant", matchedInventoryCode: "tenant-milk", quantity: 1, unit: "liter", unitPrice: 25000, totalPrice: 25000 },
+      ], totalReceipt: 55000,
+    } }) });
+    const response = await route.POST(requestFor("scan-receipt"));
+    const body = await response.json();
+    assert.equal(response.status, 200);
+    assert.deepEqual(body.lines.map((line: { matchedCode: string; quantity: number; unit: string; total: number; unitCost: number }) => [line.matchedCode, line.quantity, line.unit, line.total, line.unitCost]), [
+      ["tenant-rice", 2000, "g", 30000, 15], ["tenant-milk", 1000, "ml", 25000, 25],
+    ]);
+    assert.equal(body.total, 55000); assert.deepEqual(state, before);
+    assert.equal(route.calls[0].temperature, modelId.startsWith("gemini-2.5-flash") ? 0 : undefined);
+    assert.equal(route.calls[0].timeout.totalMs, 15000);
+    assert.equal(route.calls[0].maxRetries, 0);
+    assert.equal(route.calls[0].providerOptions?.google?.thinkingConfig?.thinkingBudget, modelId.startsWith("gemini-2.5-flash") ? 0 : undefined);
+    assert.equal(route.calls[0].providerOptions?.google?.thinkingConfig?.thinkingLevel, modelId.startsWith("gemini-3") ? "low" : undefined);
+  }
+});
+
+test("OCR provider grammar avoids serving constraints while retaining the complete receipt shape", async () => {
+  const route = routeHarness("scan-receipt", { provider: async call => {
+    const schema = (call.output as { schema: z.ZodType }).schema;
+    const json = z.toJSONSchema(schema);
+    assert.doesNotMatch(JSON.stringify(json), /"(?:minLength|maxLength|minItems|maxItems|minimum|maximum|exclusiveMinimum|exclusiveMaximum|pattern|format)":/);
+    assert.deepEqual(Object.keys(json.properties ?? {}).sort(), ["lines", "receiptDate", "supplierName", "totalReceipt"]);
+    return { output: { lines: [], totalReceipt: 15000 } };
+  } });
+  assert.equal((await route.POST(requestFor("scan-receipt"))).status, 200);
+});
+
+test("OCR validates unsafe provider output before returning any purchase preview", async () => {
+  const line = { rawName: "Beras tenant", matchedInventoryCode: "tenant-rice", quantity: 2, unit: "kg", unitPrice: 15000, totalPrice: 30000 };
+  const valid = { lines: [line], totalReceipt: 30000 };
+  const invalidLines = [
+    { quantity: 0 }, { quantity: -1 }, { quantity: 1_000_001 }, { quantity: NaN }, { quantity: Infinity },
+    { totalPrice: 0 }, { totalPrice: -1 }, { totalPrice: Number.MAX_SAFE_INTEGER + 1 },
+    { unitPrice: -1 }, { unitPrice: Number.MAX_SAFE_INTEGER + 1 },
+    { rawName: "" }, { rawName: "x".repeat(201) }, { matchedInventoryCode: "x".repeat(121) }, { unit: "x".repeat(31) },
+  ];
+  const invalidReceipts = [
+    ...invalidLines.map(change => ({ ...valid, lines: [{ ...line, ...change }] })),
+    { ...valid, lines: Array.from({ length: 101 }, () => line) },
+    { ...valid, totalReceipt: 0 }, { ...valid, totalReceipt: Number.MAX_SAFE_INTEGER + 1 },
+    { ...valid, supplierName: "x".repeat(201) }, { ...valid, receiptDate: "not-a-date" },
+  ];
+  for (const output of invalidReceipts) {
+    const state = tenantState(); const before = structuredClone(state);
+    const route = routeHarness("scan-receipt", { state, provider: async () => ({ output }) });
+    const response = await route.POST(requestFor("scan-receipt"));
+    assert.equal(response.status, 502); assertNoInventedReceipt(await response.json());
+    assert.deepEqual(state, before); assert.equal(route.calls.length, 1);
+  }
 });
 
 test("telemetry reuses authenticated identity/client and aborts a hanging insert at one second", async t => {

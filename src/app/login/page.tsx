@@ -9,6 +9,6 @@ export const metadata: Metadata = {
 
 export default async function LoginPage({ searchParams }: { searchParams: Promise<{ error?: string }> }) {
   const { error } = await searchParams;
-  const initialError = error === "no-business" ? "Akun ini belum terhubung ke usaha mana pun. Hubungi pemilik usaha untuk diundang." : undefined;
+  const initialError = error === "no-business" ? "Akun ini belum terhubung ke usaha mana pun. Hubungi pemilik usaha untuk diundang." : error === "auth-callback" ? "Tautan masuk atau pemulihan tidak valid atau sudah kedaluwarsa. Silakan masuk atau minta tautan baru." : undefined;
   return <LoginForm initialError={initialError} cloudConfigured={isCloudConfigured} demoAvailable={isDemoLoginEnabled()} />;
 }
