@@ -6,11 +6,22 @@ Laris adalah workspace operasional untuk UMKM F&B Indonesia. Satu alur menghubun
 
 Repository hackathon: [aarz24/Laris_HackathonGTNIC2026](https://github.com/aarz24/Laris_HackathonGTNIC2026)
 
-Website: **[laris.website](https://www.laris.website)** · [Demo tanpa akun](https://www.laris.website/demo) · [Status hosting dan setup domain](docs/hackathon/vercel-setup.md) · [Verifikasi cloud](docs/hackathon/cloud-verification-results.md)
+## Submission
 
-Rilis AI terbaru, **5 November 2026**: OCR nota dua item dan Tanya Laris lulus pengujian Gemini langsung di domain publik; 204 tes otomatis serta build produksi lulus. Tidak ada transaksi usaha tambahan dari pemeriksaan AI. [Hasil, bukti dan batas pengujian](docs/hackathon/cloud-ai-verification.md).
+- **Team:** Forecast — Naufal Arya Maulana (Fullstack Developer) and Abdul Hamid (UI/UX Designer)
+- **Institution:** Universitas Paramadina
+- **Live website:** [laris.website](https://laris.website)
+- **Demo tanpa akun:** [laris.website/demo](https://laris.website/demo)
+- **YouTube demo:** [Watch the demo](https://youtu.be/PoPaUH9OrhI)
+- **Final proposal:** [Download the proposal PDF](https://drive.google.com/file/d/1z4WAuRg5JN9cihXxqcrk6vblzGfyOydr/view?usp=sharing)
 
-Status QRIS, **9 November 2026**: perbaikan packaging dependency native `sharp` sudah di-deploy; build Vercel, 14 pemeriksaan publik dan 13 pemeriksaan browser produksi lulus. Alur unggah QRIS hingga struk membuat tepat satu penjualan fiktif; konfigurasi QR uji dinonaktifkan setelah tes. Sebelas pemeriksaan API Supabase sebelumnya dan 241 tes lokal juga lulus. Pemilik mengonfirmasi migration 0010; regresi recovery setelah akun kasir dihapus diuji lokal, belum secara live. Langkah pemilik berikutnya adalah mengunggah QRIS merchant aktif dan memverifikasi pembayaran kecil serta pencairannya; **uang asli belum diuji**. [Hasil dan batas verifikasi](docs/hackathon/manual-qris.md).
+Architecture, database ERD, testing summary, and responsive screenshots are collected in [`docs/submission/`](docs/submission/README.md).
+
+Website: **[laris.website](https://laris.website)** · [Demo tanpa akun](https://laris.website/demo) · [Testing summary](docs/submission/testing.md)
+
+Rilis AI terbaru, **5 November 2026**: OCR nota dua item dan Tanya Laris lulus pengujian Gemini langsung di domain publik; 204 tes otomatis serta build produksi lulus. Tidak ada transaksi usaha tambahan dari pemeriksaan AI. [Testing summary](docs/submission/testing.md).
+
+Status QRIS, **9 November 2026**: perbaikan packaging dependency native `sharp` sudah di-deploy; build Vercel, 14 pemeriksaan publik dan 13 pemeriksaan browser produksi lulus. Alur unggah QRIS hingga struk membuat tepat satu penjualan fiktif; konfigurasi QR uji dinonaktifkan setelah tes. Sebelas pemeriksaan API Supabase sebelumnya dan 241 tes lokal juga lulus. Pemilik mengonfirmasi migration 0010; regresi recovery setelah akun kasir dihapus diuji lokal, belum secara live. Langkah pemilik berikutnya adalah mengunggah QRIS merchant aktif dan memverifikasi pembayaran kecil serta pencairannya; **uang asli belum diuji**. [Testing summary](docs/submission/testing.md).
 
 ## Menjalankan Aplikasi
 
@@ -27,7 +38,7 @@ npm run dev
 
 Semua pembayaran pada demo adalah simulasi. Tidak ada dana asli yang dipindahkan.
 
-QRIS pada akun cloud mendukung gambar QRIS statis merchant milik toko. Setup database memerlukan migrations `0009_manual_qris.sql` dan `0010_qris_recording_actor.sql`, lalu owner mengaktifkan QRIS di Pengaturan. Pelanggan memasukkan nominal di aplikasi pembayaran. Kasir memeriksa penerimaan dan referensi di aplikasi merchant sebelum mencatatnya di Laris; **tidak ada konfirmasi otomatis dari bank/Midtrans**. Laris tidak menarik langganan atau menampung dana. Opsi transfer masih simulasi. Lihat [panduan aktivasi dan batas verifikasi](docs/hackathon/manual-qris.md).
+QRIS pada akun cloud mendukung gambar QRIS statis merchant milik toko. Setup database memerlukan migrations `0009_manual_qris.sql` dan `0010_qris_recording_actor.sql`, lalu owner mengaktifkan QRIS di Pengaturan. Pelanggan memasukkan nominal di aplikasi pembayaran. Kasir memeriksa penerimaan dan referensi di aplikasi merchant sebelum mencatatnya di Laris; **tidak ada konfirmasi otomatis dari bank/Midtrans**. Laris tidak menarik langganan atau menampung dana. Opsi transfer masih simulasi. Lihat [panduan aktivasi dan batas verifikasi](docs/submission/testing.md).
 
 ## Fitur
 
@@ -46,7 +57,7 @@ QRIS pada akun cloud mendukung gambar QRIS statis merchant milik toko. Setup dat
 
 Mode cloud diperlukan untuk akun dan data usaha persisten.
 
-Runbook penjurian dan status pemeriksaan: [docs/hackathon/cloud-readiness.md](docs/hackathon/cloud-readiness.md). Jalankan `npm run check:cloud -- --production` sebelum deployment; perintah ini memeriksa konfigurasi tanpa login, mengirim email, atau mengubah database. Tambahkan `--probe` untuk tiga GET read-only ke Supabase. Tidak menggantikan pengujian tenant/peran atau status migration.
+Runbook penjurian dan status pemeriksaan: [docs/submission/testing.md](docs/submission/testing.md). Jalankan `npm run check:cloud -- --production` sebelum deployment; perintah ini memeriksa konfigurasi tanpa login, mengirim email, atau mengubah database. Tambahkan `--probe` untuk tiga GET read-only ke Supabase. Tidak menggantikan pengujian tenant/peran atau status migration.
 
 1. Buat project Supabase.
 2. Salin `.env.example` menjadi `.env` dan isi URL serta publishable/anon key. Next.js dan script membaca `.env`; `.env.local` dapat dipakai untuk override lokal.
